@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vault Librarian</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
+  <script src="https://unpkg.com/force-graph@1.45.0/dist/force-graph.min.js"></script>
+  <script src="https://unpkg.com/marked@12.0.2/marked.min.js"></script>
+</head>
+<body>
+  <div id="layout">
+    <!-- ============ Chat panel ============ -->
+    <section id="chat-panel">
+      <header>
+        <h1>📚 Vault Librarian</h1>
+        <div class="header-actions">
+          <button id="reset-btn" title="Start a fresh conversation">New chat</button>
+        </div>
+      </header>
+      <div id="messages"></div>
+      <div id="composer">
+        <textarea id="input" rows="2"
+          placeholder="Ask the librarian… or drop files anywhere on the page"></textarea>
+        <button id="send-btn" title="Send">➤</button>
+      </div>
+    </section>
+
+    <!-- ============ Graph panel ============ -->
+    <section id="graph-panel">
+      <header>
+        <h2>Knowledge Graph</h2>
+        <div class="header-actions">
+          <input id="graph-search" type="search" placeholder="Find note…" />
+          <button id="refresh-graph" title="Reload graph">⟳</button>
+        </div>
+      </header>
+      <div id="graph"></div>
+      <div id="legend"></div>
+    </section>
+
+    <!-- ============ Note viewer (slides over graph) ============ -->
+    <aside id="note-panel" class="hidden">
+      <header>
+        <h3 id="note-title"></h3>
+        <button id="note-close">✕</button>
+      </header>
+      <div id="note-path"></div>
+      <article id="note-body"></article>
+    </aside>
+  </div>
+
+  <!-- ============ Drop overlay + upload dialog ============ -->
+  <div id="drop-overlay" class="hidden"><div>Drop files to give them to the librarian</div></div>
+
+  <dialog id="upload-dialog">
+    <form id="upload-form" method="dialog">
+      <h3>Send files to the librarian</h3>
+      <ul id="upload-list"></ul>
+      <label for="upload-desc">What are these? Where should they go? (optional)</label>
+      <textarea id="upload-desc" rows="3"
+        placeholder="e.g. Lecture notes on thermodynamics — file under Resources and link into a Physics MOC"></textarea>
+      <menu>
+        <button type="button" id="upload-cancel">Cancel</button>
+        <button type="submit" id="upload-send">Upload &amp; process</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
