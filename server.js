@@ -12,7 +12,7 @@ const VAULT = process.env.VAULT_PATH ||
 const PORT = process.env.PORT || 4747;
 
 // Folders never shown in the graph or touched by uploads
-const IGNORED_DIRS = new Set([".obsidian", ".claude", ".git", ".trash"]);
+const IGNORED_DIRS = new Set([".obsidian", ".claude", ".git", ".trash", "OT Dashboard"]);
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
