@@ -221,7 +221,9 @@ $("#upload-form").addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------------------
 const TYPE_COLORS = {
   moc: "#ffb74d",
+  company: "#ffffff",
   program: "#ffa726",
+  vendor: "#ba68c8",
   project: "#7c5cff",
   area: "#4dd0e1",
   resource: "#4fc3f7",
