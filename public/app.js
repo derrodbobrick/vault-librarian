@@ -227,6 +227,10 @@ const TYPE_COLORS = {
   daily: "#9575cd",
   note: "#90a4ae",
   template: "#546e7a",
+  division: "#ef5350",
+  department: "#ec407a",
+  "work-center": "#f57f17",
+  cell: "#ffee58",
   unresolved: "#5c6370",
 };
 
