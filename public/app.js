@@ -209,7 +209,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
     msg += `Please process them as the librarian: read the content (PDFs and images can be Read at their ` +
       `attachment path; spreadsheets via the extracted .txt), write or update markdown notes documenting ` +
       `the knowledge with proper frontmatter and [[wikilinks]] (embed attachments with ![[filename]]), ` +
-      `and link the new notes into the relevant MOC. Summarize what you did.`;
+      `and link the new notes into the relevant hub (program note, Smart Wiki, or org entity). Summarize what you did.`;
     sendMessage(msg);
   } catch (err) {
     addStatus("Upload failed: " + err.message, true);
@@ -221,6 +221,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
 // ---------------------------------------------------------------------------
 const TYPE_COLORS = {
   moc: "#ffb74d",
+  program: "#ffa726",
   project: "#7c5cff",
   area: "#4dd0e1",
   resource: "#4fc3f7",
@@ -256,9 +257,9 @@ function initGraph() {
     .backgroundColor("#12141a")
     .nodeId("id")
     .nodeLabel((n) => `${n.id}${n.exists ? "" : " (unresolved)"}`)
-    .nodeVal((n) => (n.type === "moc" ? 6 : 3))
+    .nodeVal((n) => (n.type === "moc" || n.type === "program" ? 6 : 3))
     .nodeCanvasObject((node, ctx, globalScale) => {
-      const r = node.type === "moc" ? 7 : node.exists ? 4.5 : 3;
+      const r = node.type === "moc" || node.type === "program" ? 7 : node.exists ? 4.5 : 3;
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
       ctx.fillStyle = TYPE_COLORS[node.type] || TYPE_COLORS.note;
