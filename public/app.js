@@ -231,6 +231,10 @@ const TYPE_COLORS = {
   department: "#ec407a",
   "work-center": "#f57f17",
   cell: "#ffee58",
+  hardware: "#8d6e63",
+  software: "#66bb6a",
+  server: "#26a69a",
+  website: "#42a5f5",
   unresolved: "#5c6370",
 };
 
