@@ -2,8 +2,12 @@ import express from "express";
 import multer from "multer";
 import path from "node:path";
 import fs from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -122,12 +126,79 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 200 * 1024 * 1024 } });
 
-app.post("/api/upload", upload.array("files", 20), (req, res) => {
-  const saved = (req.files || []).map((f) =>
-    path.relative(VAULT, f.path).split(path.sep).join("/")
-  );
-  res.json({ saved });
+// Text formats the agent can Read directly — these stay in Inbox/Uploads.
+const TEXT_EXTS = new Set([
+  ".md", ".txt", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".html",
+  ".js", ".ts", ".py", ".css", ".ini", ".toml", ".log", ".base", ".canvas",
+]);
+// Binary formats the agent's Read tool can still open at their filed location.
+const XLSX_EXTS = new Set([".xlsx", ".xlsm"]);
+
+const rel = (abs) => path.relative(VAULT, abs).split(path.sep).join("/");
+
+function uniquePath(dir, name) {
+  let out = path.join(dir, name);
+  let i = 1;
+  while (fs.existsSync(out)) {
+    const ext = path.extname(name);
+    out = path.join(dir, `${path.basename(name, ext)} (${i++})${ext}`);
+  }
+  return out;
+}
+
+// Binary handling is done here in deterministic server code, so the agent
+// never needs shell access: binaries are filed into Meta/Attachments at
+// upload time, and spreadsheets are pre-extracted to text the agent can Read.
+app.post("/api/upload", upload.array("files", 20), async (req, res) => {
+  const attachmentsDir = path.join(VAULT, "Meta", "Attachments");
+  fs.mkdirSync(attachmentsDir, { recursive: true });
+
+  const kept = [];        // text files left in Inbox/Uploads
+  const attachments = []; // binaries filed into Meta/Attachments
+  const extracted = [];   // text extractions of binaries, in Inbox/Uploads
+  const warnings = [];
+
+  for (const f of req.files || []) {
+    const ext = path.extname(f.filename).toLowerCase();
+    if (TEXT_EXTS.has(ext)) {
+      kept.push(rel(f.path));
+      continue;
+    }
+
+    // binary → file it as an attachment
+    const dest = uniquePath(attachmentsDir, f.filename);
+    fs.renameSync(f.path, dest);
+    attachments.push(rel(dest));
+
+    if (XLSX_EXTS.has(ext)) {
+      // extractions live OUTSIDE the vault (agent reads them by absolute
+      // path) so they never clutter the graph or the inbox
+      fs.mkdirSync(EXTRACT_DIR, { recursive: true });
+      const outPath = uniquePath(EXTRACT_DIR, path.basename(f.filename, ext) + ".extracted.txt");
+      try {
+        await execFileAsync("python", [
+          path.join(__dirname, "scripts", "extract_xlsx.py"), dest, outPath,
+        ], { timeout: 60000 });
+        extracted.push(outPath);
+      } catch (err) {
+        warnings.push(`Could not extract ${f.filename}: ${String(err?.message || err).slice(0, 200)}`);
+      }
+    }
+  }
+
+  res.json({ kept, attachments, extracted, warnings });
 });
+
+const EXTRACT_DIR = path.join(__dirname, "extractions");
+
+// prune extraction files older than 7 days on startup
+try {
+  const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
+  for (const name of fs.existsSync(EXTRACT_DIR) ? fs.readdirSync(EXTRACT_DIR) : []) {
+    const p = path.join(EXTRACT_DIR, name);
+    if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+  }
+} catch { /* best effort */ }
 
 // ---------------------------------------------------------------------------
 // Graph: parse the vault's wikilinks + frontmatter

@@ -194,12 +194,21 @@ $("#upload-form").addEventListener("submit", async (e) => {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.status);
 
-    const fileList = data.saved.map((p) => `- ${p}`).join("\n");
-    let msg = `I just dropped ${data.saved.length} file(s) into the vault:\n${fileList}\n\n`;
+    const lines = [];
+    if (data.kept?.length)
+      lines.push(`Text files in Inbox/Uploads (read these directly):\n${data.kept.map((p) => `- ${p}`).join("\n")}`);
+    if (data.attachments?.length)
+      lines.push(`Binary files already filed into Meta/Attachments (do NOT move them):\n${data.attachments.map((p) => `- ${p}`).join("\n")}`);
+    if (data.extracted?.length)
+      lines.push(`Spreadsheet contents pre-extracted to text at these absolute paths (Read them for the sheet data):\n${data.extracted.map((p) => `- ${p}`).join("\n")}`);
+    if (data.warnings?.length)
+      lines.push(`Warnings:\n${data.warnings.map((w) => `- ${w}`).join("\n")}`);
+
+    let msg = `I just dropped file(s) into the vault.\n\n${lines.join("\n\n")}\n\n`;
     if (desc) msg += `About these files / where they should go: ${desc}\n\n`;
-    msg += `Please process them as the librarian: move each to the right place per CLAUDE.md ` +
-      `(binary files and attachments belong in Meta/Attachments), read what you can, write or update ` +
-      `markdown notes documenting the knowledge in them with proper frontmatter and [[wikilinks]], ` +
+    msg += `Please process them as the librarian: read the content (PDFs and images can be Read at their ` +
+      `attachment path; spreadsheets via the extracted .txt), write or update markdown notes documenting ` +
+      `the knowledge with proper frontmatter and [[wikilinks]] (embed attachments with ![[filename]]), ` +
       `and link the new notes into the relevant MOC. Summarize what you did.`;
     sendMessage(msg);
   } catch (err) {
