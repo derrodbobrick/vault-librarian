@@ -44,10 +44,30 @@
     <aside id="note-panel" class="hidden">
       <header>
         <h3 id="note-title"></h3>
-        <button id="note-close">✕</button>
+        <div class="header-actions">
+          <button id="note-edit" title="Edit this note">✎ Edit</button>
+          <button id="note-close">✕</button>
+        </div>
       </header>
       <div id="note-path"></div>
       <article id="note-body"></article>
+      <div id="note-editor" class="hidden">
+        <textarea id="note-source" spellcheck="false"></textarea>
+        <div class="editor-actions">
+          <button id="edit-cancel-note">Cancel</button>
+          <button id="edit-save-note" class="primary-btn">Save</button>
+        </div>
+      </div>
+      <div id="connections">
+        <h4>Connections</h4>
+        <ul id="conn-list"></ul>
+        <div class="conn-add">
+          <input id="conn-target" list="node-list" placeholder="Connect to note…" />
+          <datalist id="node-list"></datalist>
+          <input id="conn-reason" placeholder="Why are they connected?" />
+          <button id="conn-add-btn">Link</button>
+        </div>
+      </div>
     </aside>
   </div>
 

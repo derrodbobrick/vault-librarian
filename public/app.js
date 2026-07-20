@@ -317,10 +317,15 @@ $("#graph-search").addEventListener("keydown", (e) => {
 // ---------------------------------------------------------------------------
 // Note viewer
 // ---------------------------------------------------------------------------
+let currentNote = null; // { name, markdown }
+
 async function openNote(name) {
   const resp = await fetch(`/api/note?name=${encodeURIComponent(name)}`);
   if (!resp.ok) return;
   const data = await resp.json();
+  currentNote = { name: data.name, markdown: data.markdown };
+  showViewer();
+  renderConnections(data.name, data.markdown);
 
   $("#note-title").textContent = data.name;
   $("#note-path").textContent = data.path;
@@ -360,6 +365,96 @@ $("#note-body").addEventListener("click", (e) => {
   if (link && !link.classList.contains("unresolved")) openNote(link.dataset.note);
 });
 $("#note-close").addEventListener("click", () => $("#note-panel").classList.add("hidden"));
+
+// ---------------------------------------------------------------------------
+// Manual editing: note source + connection management
+// ---------------------------------------------------------------------------
+function showViewer() {
+  $("#note-body").classList.remove("hidden");
+  $("#note-editor").classList.add("hidden");
+}
+
+$("#note-edit").addEventListener("click", () => {
+  if (!currentNote) return;
+  $("#note-source").value = currentNote.markdown;
+  $("#note-body").classList.add("hidden");
+  $("#note-editor").classList.remove("hidden");
+});
+$("#edit-cancel-note").addEventListener("click", showViewer);
+$("#edit-save-note").addEventListener("click", async () => {
+  if (!currentNote) return;
+  const resp = await fetch("/api/note", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: currentNote.name, markdown: $("#note-source").value }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    return alert("Save failed: " + (err.error || resp.status));
+  }
+  await loadGraph();
+  openNote(currentNote.name);
+});
+
+function renderConnections(name, markdown) {
+  // parse this note's outgoing links + reasons from Related-style bullets
+  const stripped = markdown.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+  const reasons = new Map();
+  for (const m of stripped.matchAll(/^\s*- \[\[([^\]|#\n]+)(?:\|[^\]]*)?\]\]\s*(?:—|-)?\s*(.*)$/gm)) {
+    reasons.set(m[1].trim(), m[2].trim());
+  }
+  const linked = new Set();
+  for (const m of stripped.matchAll(/\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g)) {
+    const t = m[1].trim();
+    if (t && t !== name && !t.includes(".")) linked.add(t);
+  }
+  const list = $("#conn-list");
+  list.innerHTML = "";
+  for (const target of [...linked].sort()) {
+    const li = document.createElement("li");
+    li.innerHTML =
+      `<span class="conn-name">${escapeHtml(target)}</span>` +
+      `<span class="conn-why">${escapeHtml(reasons.get(target) || "(documented in note body)")}</span>` +
+      `<button class="conn-del" title="Disconnect (both notes)">✕</button>`;
+    li.querySelector(".conn-name").addEventListener("click", () => openNote(target));
+    li.querySelector(".conn-del").addEventListener("click", async () => {
+      if (!confirm(`Disconnect "${name}" and "${target}"? Mentions become plain text in both notes.`)) return;
+      await fetch("/api/link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: name, to: target }),
+      });
+      await loadGraph();
+      openNote(name);
+    });
+    list.appendChild(li);
+  }
+  // populate autocomplete with all existing notes
+  $("#node-list").innerHTML = graphData.nodes
+    .filter((n) => n.exists && n.id !== name)
+    .map((n) => `<option value="${escapeHtml(n.id)}">`).join("");
+}
+
+$("#conn-add-btn").addEventListener("click", async () => {
+  if (!currentNote) return;
+  const to = $("#conn-target").value.trim();
+  const reason = $("#conn-reason").value.trim();
+  if (!to) return;
+  if (!reason) return alert("Per the vault rules, every connection needs a documented reason.");
+  const resp = await fetch("/api/link", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from: currentNote.name, to, reason }),
+  });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    return alert("Link failed: " + (err.error || resp.status));
+  }
+  $("#conn-target").value = "";
+  $("#conn-reason").value = "";
+  await loadGraph();
+  openNote(currentNote.name);
+});
 
 // ---------------------------------------------------------------------------
 // Boot

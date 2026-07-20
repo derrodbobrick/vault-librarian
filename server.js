@@ -222,6 +222,90 @@ app.get("/api/note", (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Manual editing: save a note, add/remove connections (both endpoints)
+// ---------------------------------------------------------------------------
+const clean = (s, max) => String(s ?? "").trim().slice(0, max);
+
+function appendActivity(entry) {
+  try {
+    const logPath = path.join(VAULT, "Meta", "Activity Log.md");
+    let t = fs.readFileSync(logPath, "utf-8");
+    const today = new Date().toISOString().slice(0, 10);
+    const header = `## ${today}`;
+    const line = `- ${entry}`;
+    if (t.includes(header)) {
+      t = t.replace(header + "\n\n", header + "\n\n" + line + "\n");
+    } else {
+      // insert a new dated section after the intro (before the first ## )
+      const idx = t.search(/\n## /);
+      t = idx === -1 ? t + `\n${header}\n\n${line}\n`
+        : t.slice(0, idx) + `\n${header}\n\n${line}\n` + t.slice(idx);
+    }
+    fs.writeFileSync(logPath, t);
+  } catch { /* best effort */ }
+}
+
+app.put("/api/note", (req, res) => {
+  const name = String(req.body?.name || "");
+  const markdown = String(req.body?.markdown ?? "");
+  const file = findNoteByName(name);
+  if (!file) return res.status(404).json({ error: "note not found" });
+  if (!markdown.trim()) return res.status(400).json({ error: "refusing to save empty note" });
+  fs.writeFileSync(file, markdown.endsWith("\n") ? markdown : markdown + "\n");
+  appendActivity(`Manually edited the note "${name}" via the Vault Librarian UI.`);
+  res.json({ ok: true });
+});
+
+function addRelatedBullet(file, target, reason) {
+  let t = fs.readFileSync(file, "utf-8");
+  const bullet = `- [[${target}]] — ${reason}`;
+  const idx = t.indexOf("## Related");
+  if (idx !== -1) {
+    const rest = t.slice(idx + 3);
+    const nxt = rest.search(/\n## /);
+    const insertAt = nxt === -1 ? t.length : idx + 3 + nxt;
+    t = t.slice(0, insertAt).replace(/\n*$/, "\n") + bullet + "\n" + t.slice(insertAt).replace(/^\n*/, nxt === -1 ? "" : "\n");
+  } else {
+    t = t.replace(/\n*$/, "\n") + `\n## Related\n\n${bullet}\n`;
+  }
+  fs.writeFileSync(file, t);
+}
+
+function removeLinks(file, target) {
+  let t = fs.readFileSync(file, "utf-8");
+  const esc = target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // drop whole Related bullets pointing at target
+  t = t.replace(new RegExp(`^\\s*- \\[\\[${esc}(?:#[^\\]|\\n]*)?(?:\\|[^\\]\\n]*)?\\]\\][^\\n]*\\n`, "gm"), "");
+  // de-link inline mentions (keep display text)
+  t = t.replace(new RegExp(`\\[\\[${esc}(?:#[^\\]|\\n]*)?\\|([^\\]\\n]*)\\]\\]`, "g"), "$1");
+  t = t.replace(new RegExp(`\\[\\[${esc}(?:#[^\\]|\\n]*)?\\]\\]`, "g"), target);
+  fs.writeFileSync(file, t);
+}
+
+app.post("/api/link", (req, res) => {
+  const { from, to, reason } = req.body || {};
+  const fileA = findNoteByName(String(from || ""));
+  const fileB = findNoteByName(String(to || ""));
+  if (!fileA || !fileB) return res.status(404).json({ error: "note not found" });
+  const why = clean(reason, 300) || "connected via the Vault Librarian UI";
+  addRelatedBullet(fileA, to, why);
+  addRelatedBullet(fileB, from, why);
+  appendActivity(`Connected "${from}" and "${to}" via the UI — ${why}.`);
+  res.json({ ok: true });
+});
+
+app.delete("/api/link", (req, res) => {
+  const { from, to } = req.body || {};
+  const fileA = findNoteByName(String(from || ""));
+  const fileB = findNoteByName(String(to || ""));
+  if (!fileA || !fileB) return res.status(404).json({ error: "note not found" });
+  removeLinks(fileA, to);
+  removeLinks(fileB, from);
+  appendActivity(`Disconnected "${from}" and "${to}" via the UI (mentions kept as plain text).`);
+  res.json({ ok: true });
+});
+
 function walkMarkdown(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
