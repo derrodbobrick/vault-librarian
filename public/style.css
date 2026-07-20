@@ -57,25 +57,34 @@
   --graph-label: #C7CEDA;
   --graph-label-dim: #6B7585;
   --graph-ring: #22D3EE;
-  --node-moc: #FCD34D;
-  --node-company: #F8FAFC;
-  --node-program: #FBBF24;
-  --node-vendor: #C084FC;
-  --node-project: #A78BFA;
-  --node-area: #5EEAD4;
-  --node-resource: #38BDF8;
-  --node-daily: #818CF8;
-  --node-note: #94A3B8;
-  --node-template: #64748B;
-  --node-division: #F87171;
-  --node-department: #F472B6;
-  --node-work-center: #FB923C;
-  --node-cell: #FDE047;
-  --node-machine: #90A7BC;
-  --node-hardware: #C4A48E;
-  --node-software: #4ADE80;
-  --node-server: #2DD4BF;
-  --node-website: #60A5FA;
+  /* Type-anchored hierarchy ramp: one fixed color per type, positioned along a
+     warm->cool OKLCH gradient ordered by structural rank (company hot/near-white
+     -> divisions red -> departments orange -> work-centers amber -> cells/programs
+     yellow-green -> projects teal -> vendors cyan -> assets blue-violet -> notes
+     slate tail). Derived via the dataviz skill's method; all stops >= 3:1 vs
+     --graph-bg. Read by app.js via getComputedStyle. */
+  --node-company: #E3F6F7;
+  --node-division: #F47B74;
+  --node-department: #F59749;
+  --node-work-center: #F2CD6F;
+  --node-cell: #E9F090;
+  --node-program: #8AD882;
+  --node-moc: #C0DE8D;
+  --node-area: #8BC49E;
+  --node-person: #FEC5DA;
+  --node-project: #42C3A6;
+  --node-report-series: #61CCC3;
+  --node-report: #90DBD5;
+  --node-vendor: #25A4B1;
+  --node-machine: #6FBCE3;
+  --node-hardware: #5591C9;
+  --node-software: #8DA5E7;
+  --node-server: #7D76B9;
+  --node-website: #B088CE;
+  --node-resource: #787DA1;
+  --node-daily: #877D9D;
+  --node-note: #5F6A79;
+  --node-template: #68737B;
   --node-unresolved: #55606E;
 
   --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
@@ -116,25 +125,30 @@
   --graph-label: #3A4656;
   --graph-label-dim: #8B96A5;
   --graph-ring: #0E7490;
-  --node-moc: #B45309;
-  --node-company: #0F172A;
-  --node-program: #D97706;
-  --node-vendor: #9333EA;
-  --node-project: #7C3AED;
-  --node-area: #0D9488;
-  --node-resource: #0284C7;
-  --node-daily: #4F46E5;
-  --node-note: #64748B;
-  --node-template: #94A3B8;
-  --node-division: #DC2626;
-  --node-department: #DB2777;
-  --node-work-center: #EA580C;
-  --node-cell: #CA8A04;
-  --node-machine: #475569;
-  --node-hardware: #92400E;
-  --node-software: #16A34A;
-  --node-server: #0F766E;
-  --node-website: #2563EB;
+  /* Light-theme hierarchy ramp: root = boldest ink, tail fades toward the
+     canvas while every stop stays >= 3:1 vs --graph-bg. */
+  --node-company: #172A3E;
+  --node-division: #A92227;
+  --node-department: #B76935;
+  --node-work-center: #735101;
+  --node-cell: #878524;
+  --node-program: #207029;
+  --node-moc: #647C36;
+  --node-area: #467557;
+  --node-person: #82326C;
+  --node-project: #098777;
+  --node-report-series: #04736C;
+  --node-report: #52919E;
+  --node-vendor: #006772;
+  --node-machine: #367A9B;
+  --node-hardware: #194F81;
+  --node-software: #5066A3;
+  --node-server: #3C326E;
+  --node-website: #7A3C8D;
+  --node-resource: #6C6E91;
+  --node-daily: #675E7A;
+  --node-note: #848D9B;
+  --node-template: #788288;
   --node-unresolved: #9AA4B2;
 }
 

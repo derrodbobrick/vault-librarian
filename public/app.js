@@ -740,11 +740,25 @@ $("#upload-form").addEventListener("submit", async (e) => {
 /* ---------------------------------------------------------------------------
    Graph
 --------------------------------------------------------------------------- */
+/* Types in structural-rank order — the legend reads as one progression
+   outward from the company root, and colors form a warm->cool gradient. */
 const NODE_TYPES = [
-  "moc", "company", "program", "vendor", "project", "area", "resource", "daily",
-  "note", "template", "division", "department", "work-center", "cell",
-  "machine", "hardware", "software", "server", "website", "unresolved",
+  "company",                      // rank 0 — root
+  "division",                     // rank 1
+  "department", "work-center",    // rank 2
+  "cell", "program", "moc", "area", // rank 3
+  "person",                       // attaches at the org levels
+  "project", "report-series", "report", // rank 4
+  "vendor",                       // attaches beside projects/assets
+  "machine", "hardware", "software", "server", "website", // rank 5 — assets
+  "resource", "daily", "note", "template", // tail
+  "unresolved",
 ];
+
+/* BFS depth from the company root is only a FALLBACK for nodes whose type has
+   no anchor color: depth d borrows the ramp color of the type at that rank. */
+const ROOT_NOTE = "Bobrick Washroom Equipment, Inc.";
+const DEPTH_FALLBACK = ["company", "division", "department", "cell", "project", "machine", "resource", "note"];
 
 let graph = null;
 let graphData = { nodes: [], links: [] };
@@ -752,6 +766,7 @@ let nodeById = new Map();     // id -> node object
 let degree = new Map();       // id -> link count
 let neighbors = new Map();    // id -> Set(ids)
 let topDegreeIds = new Set(); // always-labelled hubs
+let depths = new Map();       // id -> hops from the company root (fallback coloring)
 let hoverNode = null;
 let selectedId = null;
 let hiddenTypes = new Set();
@@ -781,6 +796,34 @@ function readGraphTheme() {
 
 function typeColor(type) {
   return graphTheme.types?.[type] || graphTheme.types?.note || "#94A3B8";
+}
+
+/* Fill color for a node: its type's ramp anchor; unknown types fall back to
+   their BFS depth's rank color; unreachable/unresolved stay muted gray. */
+function nodeFill(node) {
+  if (!node.exists) return typeColor("unresolved");
+  if (graphTheme.types?.[node.type]) return graphTheme.types[node.type];
+  const d = depths.get(node.id);
+  if (d == null) return typeColor("unresolved");
+  return typeColor(DEPTH_FALLBACK[Math.min(d, DEPTH_FALLBACK.length - 1)]);
+}
+
+function computeDepths() {
+  depths = new Map();
+  const root = graphData.nodes.find((n) => n.id.toLowerCase() === ROOT_NOTE.toLowerCase());
+  if (!root) return;
+  depths.set(root.id, 0);
+  let frontier = [root.id];
+  while (frontier.length) {
+    const next = [];
+    for (const id of frontier) {
+      const d = depths.get(id);
+      for (const nb of neighbors.get(id) || []) {
+        if (!depths.has(nb)) { depths.set(nb, d + 1); next.push(nb); }
+      }
+    }
+    frontier = next;
+  }
 }
 
 function refreshGraphTheme() {
@@ -843,6 +886,7 @@ async function loadGraph({ keepView = false } = {}) {
   }
   const byDegree = [...degree.entries()].sort((a, b) => b[1] - a[1]);
   topDegreeIds = new Set(byDegree.slice(0, 8).filter(([, d]) => d >= 3).map(([id]) => id));
+  computeDepths();
 
   if (focusState && !degree.has(focusState.rootId)) exitFocusMode();
   if (focusState) computeFocusVisible();
@@ -904,7 +948,7 @@ function initGraph() {
       ctx.globalAlpha = alpha;
       ctx.beginPath();
       ctx.arc(node.x, node.y, r, 0, 2 * Math.PI);
-      ctx.fillStyle = typeColor(node.exists ? node.type : "unresolved");
+      ctx.fillStyle = nodeFill(node);
       ctx.fill();
 
       if (node.id === selectedId) {
@@ -972,8 +1016,9 @@ function centerOn(id, zoomLevel = 3) {
 
 /* legend doubles as a type filter */
 function renderLegend() {
+  const rank = (t) => { const i = NODE_TYPES.indexOf(t); return i === -1 ? NODE_TYPES.length : i; };
   const present = [...new Set(graphData.nodes.map((n) => n.type))]
-    .sort((a, b) => NODE_TYPES.indexOf(a) - NODE_TYPES.indexOf(b));
+    .sort((a, b) => rank(a) - rank(b));
   const legend = $("#legend");
   legend.replaceChildren(...present.map((type) => {
     const b = document.createElement("button");
