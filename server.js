@@ -27,6 +27,7 @@ app.use(express.static(path.join(__dirname, "public")));
 // ---------------------------------------------------------------------------
 let sessionId = null; // resume token for conversation continuity
 let busy = false;
+let activeQuery = null; // the in-flight query, so /api/stop can interrupt it
 
 app.post("/api/chat", async (req, res) => {
   const userMessage = (req.body?.message || "").trim();
@@ -54,14 +55,28 @@ app.post("/api/chat", async (req, res) => {
           "Bash(git *)", "Bash(obsidian *)",
         ],
         maxTurns: 150,
+        // Stream token-level deltas so the UI can render text as it arrives.
+        includePartialMessages: true,
         ...(sessionId ? { resume: sessionId } : {}),
       },
     });
+    activeQuery = q;
 
     for await (const msg of q) {
       if (msg.type === "system" && msg.subtype === "init") {
         sessionId = msg.session_id || sessionId;
         send({ kind: "session", id: sessionId });
+      } else if (msg.type === "stream_event") {
+        // Token deltas for the top-level assistant only (subagents stay quiet);
+        // the full "text" event that follows is the authoritative content.
+        if (
+          msg.parent_tool_use_id == null &&
+          msg.event?.type === "content_block_delta" &&
+          msg.event.delta?.type === "text_delta" &&
+          msg.event.delta.text
+        ) {
+          send({ kind: "delta", text: msg.event.delta.text });
+        }
       } else if (msg.type === "assistant") {
         const blocks = msg.message?.content || [];
         for (const block of blocks) {
@@ -86,8 +101,18 @@ app.post("/api/chat", async (req, res) => {
     send({ kind: "error", message: String(err?.message || err) });
   } finally {
     busy = false;
+    activeQuery = null;
     res.end();
   }
+});
+
+app.post("/api/stop", async (req, res) => {
+  const q = activeQuery;
+  if (q && typeof q.interrupt === "function") {
+    try { await q.interrupt(); } catch { /* already finished */ }
+    return res.json({ ok: true });
+  }
+  res.json({ ok: false, error: "nothing running" });
 });
 
 app.post("/api/reset", (req, res) => {

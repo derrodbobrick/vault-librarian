@@ -4,89 +4,215 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vault Librarian</title>
+  <script>
+    // Apply theme before first paint (default dark, respect stored pref / OS)
+    (function () {
+      var stored = null;
+      try { stored = localStorage.getItem("vl-theme"); } catch (e) {}
+      var theme = stored || (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <link rel="stylesheet" href="style.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
-  <script src="https://unpkg.com/force-graph@1.45.0/dist/force-graph.min.js"></script>
-  <script src="https://unpkg.com/marked@12.0.2/marked.min.js"></script>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='30' cy='35' r='14' fill='%2322D3EE'/><circle cx='70' cy='30' r='9' fill='%2394A3B8'/><circle cx='62' cy='72' r='11' fill='%2394A3B8'/><path d='M30 35 L70 30 M30 35 L62 72' stroke='%2394A3B8' stroke-width='4'/></svg>" />
+  <script src="vendor/force-graph.min.js"></script>
+  <script src="vendor/marked.min.js"></script>
 </head>
 <body>
-  <div id="layout">
-    <!-- ============ Chat panel ============ -->
-    <section id="chat-panel">
-      <header>
-        <h1>📚 Vault Librarian</h1>
-        <div class="header-actions">
-          <button id="reset-btn" title="Start a fresh conversation">New chat</button>
-        </div>
-      </header>
-      <div id="messages"></div>
-      <div id="composer">
-        <textarea id="input" rows="2"
-          placeholder="Ask the librarian… or drop files anywhere on the page"></textarea>
-        <button id="send-btn" title="Send">➤</button>
-      </div>
-    </section>
+  <div id="app">
 
-    <!-- ============ Graph panel ============ -->
-    <section id="graph-panel">
-      <header>
-        <h2>Knowledge Graph</h2>
-        <div class="header-actions">
-          <input id="graph-search" type="search" placeholder="Find note…" />
-          <button id="refresh-graph" title="Reload graph">⟳</button>
-        </div>
-      </header>
-      <div id="graph"></div>
-      <div id="legend"></div>
-    </section>
+    <!-- ============ Left rail ============ -->
+    <nav id="rail" aria-label="App navigation">
+      <div class="rail-brand" title="Vault Librarian">
+        <svg viewBox="0 0 100 100" width="26" height="26" aria-hidden="true">
+          <circle cx="30" cy="35" r="14" class="brand-accent" />
+          <circle cx="70" cy="30" r="9" class="brand-dim" />
+          <circle cx="62" cy="72" r="11" class="brand-dim" />
+          <path d="M30 35 L70 30 M30 35 L62 72" class="brand-line" />
+        </svg>
+      </div>
+      <button id="rail-new-chat" class="rail-btn" title="New chat — resets the librarian's session">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        <span class="sr-only">New chat</span>
+      </button>
+      <button id="rail-palette" class="rail-btn" title="Search notes and actions (Ctrl+K)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <span class="sr-only">Command palette</span>
+      </button>
+      <button id="rail-focus" class="rail-btn" title="Cycle layout: split / graph / chat (Ctrl+.)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M14 4v16" /></svg>
+        <span class="sr-only">Cycle layout</span>
+      </button>
+      <button id="rail-upload" class="rail-btn" title="Add files to the vault">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-3" /><path d="M12 16V4m0 0L7 9m5-5l5 5" /></svg>
+        <span class="sr-only">Upload files</span>
+      </button>
+      <div class="rail-spacer"></div>
+      <div id="session-dot" class="session-dot" title="Librarian idle"></div>
+      <button id="rail-theme" class="rail-btn" title="Switch theme">
+        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 13A8.5 8.5 0 0 1 11 3a8.5 8.5 0 1 0 10 10z" /></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5" /><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.5 4.5l2 2M17.5 17.5l2 2M19.5 4.5l-2 2M6.5 17.5l-2 2" /></svg>
+        <span class="sr-only">Switch theme</span>
+      </button>
+    </nav>
 
-    <!-- ============ Note viewer (slides over graph) ============ -->
-    <aside id="note-panel" class="hidden">
-      <header>
-        <h3 id="note-title"></h3>
-        <div class="header-actions">
-          <button id="note-edit" title="Edit this note">✎ Edit</button>
-          <button id="note-close">✕</button>
+    <!-- ============ Center stage: graph ============ -->
+    <main id="stage">
+      <header id="stage-header">
+        <h1>Knowledge graph</h1>
+        <div class="stage-tools">
+          <button id="graph-search-btn" class="ghost-btn search-hint" title="Search notes (Ctrl+K)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+            <span>Find note…</span><kbd>Ctrl K</kbd>
+          </button>
+          <div class="stage-group" id="focus-controls" hidden>
+            <label for="focus-depth" class="mini-label">depth</label>
+            <select id="focus-depth" title="Neighborhood depth">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+            <button id="focus-exit" class="ghost-btn" title="Exit neighborhood focus">Exit focus</button>
+          </div>
+          <button id="orphans-toggle" class="ghost-btn toggle" title="Show or hide notes with no connections" aria-pressed="true">Orphans</button>
+          <button id="refresh-graph" class="ghost-btn" title="Reload graph from the vault">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6" /><path d="M20 3v4h-4" /></svg>
+            <span class="sr-only">Reload graph</span>
+          </button>
         </div>
       </header>
-      <div id="note-path"></div>
-      <article id="note-body"></article>
-      <div id="note-editor" class="hidden">
-        <textarea id="note-source" spellcheck="false"></textarea>
-        <div class="editor-actions">
-          <button id="edit-cancel-note">Cancel</button>
-          <button id="edit-save-note" class="primary-btn">Save</button>
+      <div id="graph-wrap">
+        <div id="graph"></div>
+        <div id="legend" role="group" aria-label="Filter nodes by type"></div>
+        <div id="graph-empty" class="graph-state" hidden>
+          <p>No notes matched the current filters.</p>
+          <button id="clear-filters" class="ghost-btn">Clear filters</button>
+        </div>
+        <div id="graph-error" class="graph-state" hidden>
+          <p id="graph-error-msg">The graph failed to load.</p>
+          <button id="graph-retry" class="primary-btn">Try again</button>
         </div>
       </div>
-      <div id="connections">
-        <h4>Connections</h4>
-        <ul id="conn-list"></ul>
-        <div class="conn-add">
-          <input id="conn-target" list="node-list" placeholder="Connect to note…" />
-          <datalist id="node-list"></datalist>
-          <input id="conn-reason" placeholder="Why are they connected?" />
-          <button id="conn-add-btn">Link</button>
+
+      <!-- Note viewer slides over the graph -->
+      <aside id="note-panel" hidden aria-label="Note viewer">
+        <header>
+          <div class="note-heading">
+            <h2 id="note-title"></h2>
+            <div id="note-path" class="mono"></div>
+          </div>
+          <div class="header-actions">
+            <button id="note-ask" class="ghost-btn" title="Insert this note into the chat composer">Ask about this</button>
+            <button id="note-edit" class="ghost-btn" title="Edit the raw markdown">Edit</button>
+            <button id="note-close" class="icon-btn" title="Close (Esc)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          </div>
+        </header>
+        <div id="note-badges"></div>
+        <article id="note-body"></article>
+        <div id="note-editor" hidden>
+          <textarea id="note-source" spellcheck="false" aria-label="Note markdown source"></textarea>
+          <div class="editor-actions">
+            <button id="edit-cancel-note" class="ghost-btn">Cancel</button>
+            <button id="edit-save-note" class="primary-btn">Save note</button>
+          </div>
+        </div>
+        <section id="connections" aria-label="Connections">
+          <h3>Links from this note</h3>
+          <ul id="conn-list"></ul>
+          <h3 id="backlinks-title" hidden>Linked from</h3>
+          <ul id="backlink-list"></ul>
+          <div class="conn-add">
+            <input id="conn-target" list="node-list" placeholder="Connect to note…" aria-label="Note to connect to" />
+            <datalist id="node-list"></datalist>
+            <input id="conn-reason" placeholder="Why are they connected?" aria-label="Reason for the connection" />
+            <button id="conn-add-btn" class="primary-btn">Link</button>
+          </div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- ============ Right dock: chat ============ -->
+    <aside id="dock" aria-label="Chat with the librarian">
+      <div id="dock-handle" title="Drag to resize"></div>
+      <div id="dock-inner">
+        <header id="dock-header">
+          <h2>Librarian</h2>
+          <div class="header-actions">
+            <span id="chat-status" class="chat-status" data-state="idle">idle</span>
+            <button id="reset-btn" class="ghost-btn" title="Start a fresh conversation">New chat</button>
+          </div>
+        </header>
+        <div id="messages" aria-live="polite"></div>
+        <button id="jump-latest" class="jump-pill" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14m0 0l-6-6m6 6l6-6" /></svg>
+          Jump to latest
+        </button>
+        <div id="composer">
+          <div id="slash-pop" class="slash-pop" hidden></div>
+          <div class="composer-box">
+            <textarea id="input" rows="1"
+              placeholder="Ask the librarian… ( / for commands )"
+              aria-label="Message the librarian"></textarea>
+            <div class="composer-actions">
+              <button id="attach-btn" class="icon-btn" title="Attach files">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.5l-8.5 8.5a5.66 5.66 0 0 1-8-8L13 4.5a3.77 3.77 0 0 1 5.3 5.3L9.9 18.2a1.89 1.89 0 0 1-2.7-2.7l7.8-7.8" /></svg>
+              </button>
+              <button id="send-btn" class="send-btn" title="Send (Enter)">
+                <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12l16-7-4.5 7L20 19 4 12z" fill="currentColor" stroke="none"/></svg>
+                <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/></svg>
+              </button>
+            </div>
+          </div>
+          <input id="file-input" type="file" multiple hidden />
         </div>
       </div>
     </aside>
   </div>
 
+  <!-- ============ Command palette ============ -->
+  <div id="palette-overlay" hidden>
+    <div id="palette" role="dialog" aria-label="Command palette">
+      <div class="palette-input-row">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
+        <input id="palette-input" type="text" role="combobox" aria-expanded="true"
+          aria-controls="palette-list" aria-autocomplete="list" autocomplete="off"
+          placeholder="Search notes, or type > for actions…" />
+        <kbd>Esc</kbd>
+      </div>
+      <ul id="palette-list" role="listbox"></ul>
+      <div class="palette-foot">
+        <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> navigate</span>
+        <span><kbd>Enter</kbd> open</span>
+      </div>
+    </div>
+  </div>
+
   <!-- ============ Drop overlay + upload dialog ============ -->
-  <div id="drop-overlay" class="hidden"><div>Drop files to give them to the librarian</div></div>
+  <div id="drop-overlay" hidden>
+    <div class="drop-card">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v3a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-3" /><path d="M12 16V4m0 0L7 9m5-5l5 5" /></svg>
+      <p class="drop-title">Drop files for the librarian</p>
+      <p class="drop-sub">Notes, text, spreadsheets, PDFs, images — they'll be filed, documented and linked into the graph.</p>
+    </div>
+  </div>
 
   <dialog id="upload-dialog">
     <form id="upload-form" method="dialog">
       <h3>Send files to the librarian</h3>
       <ul id="upload-list"></ul>
-      <label for="upload-desc">What are these? Where should they go? (optional)</label>
+      <label for="upload-desc">What are these? Where should they go? <span class="mini-label">(optional)</span></label>
       <textarea id="upload-desc" rows="3"
-        placeholder="e.g. Lecture notes on thermodynamics — file under Resources and link into a Physics MOC"></textarea>
+        placeholder="e.g. Lecture notes on thermodynamics — file under Resources and link into a Physics hub"></textarea>
       <menu>
-        <button type="button" id="upload-cancel">Cancel</button>
-        <button type="submit" id="upload-send">Upload &amp; process</button>
+        <button type="button" id="upload-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" id="upload-send" class="primary-btn">Upload &amp; process</button>
       </menu>
     </form>
   </dialog>
+
+  <div id="toasts" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>
