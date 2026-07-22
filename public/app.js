@@ -7,6 +7,32 @@
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
 
+/* ---------------------------------------------------------------------------
+   Session identity + edit lock
+   Each browser tab is its own librarian session (its own conversation). One
+   tab at a time may hold the vault "edit lock"; everyone else is read-only
+   until it is released (or the holder's tab closes).
+--------------------------------------------------------------------------- */
+const CLIENT_ID = (() => {
+  let id = null;
+  try { id = sessionStorage.getItem("vl-client"); } catch { }
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID && crypto.randomUUID()) ||
+      (Date.now().toString(36) + Math.random().toString(36).slice(2));
+    try { sessionStorage.setItem("vl-client", id); } catch { }
+  }
+  return id;
+})();
+
+let editMode = false;          // does THIS tab currently hold the edit lock?
+let editLockedByOther = false; // is another tab holding it right now?
+
+// fetch wrapper that tags every request with this tab's client id
+function api(url, opts = {}) {
+  const headers = Object.assign({ "x-client-id": CLIENT_ID }, opts.headers || {});
+  return fetch(url, Object.assign({}, opts, { headers }));
+}
+
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -262,6 +288,74 @@ function setChatState(state) {
   sendBtn.title = state === "busy" ? "Stop the librarian" : "Send (Enter)";
 }
 
+/* ---- edit lock (one editor at a time across all sessions) ---- */
+const editCheck = $("#edit-check");
+const editToggle = $("#edit-toggle");
+
+function reflectEditState() {
+  editCheck.checked = editMode;
+  // only disable the box when someone ELSE holds the lock
+  editCheck.disabled = editLockedByOther && !editMode;
+  editToggle.classList.toggle("locked", editLockedByOther && !editMode);
+  editToggle.classList.toggle("active", editMode);
+  editToggle.title = editMode
+    ? "Edit mode ON — the librarian and manual tools can change the vault. Uncheck to release it for others."
+    : editLockedByOther
+      ? "Another session is editing. You have read-only access until they release it."
+      : "Read-only. Check to let the librarian and manual tools change the vault (one session at a time).";
+  appEl.dataset.edit = editMode ? "on" : "off";
+  document.body.classList.toggle("readonly", !editMode);
+}
+
+async function setEditMode(want) {
+  try {
+    const resp = await api("/api/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ want }),
+    });
+    const st = await resp.json();
+    editMode = !!st.editing;
+    editLockedByOther = !!st.lockedByOther;
+    if (want && !editMode) toast("Another session is editing — you're read-only until they release it.", "info", 3400);
+    else if (editMode) toast("Edit mode on — you can change the vault.", "success", 2200);
+    else toast("Edit mode off — read-only.", "info", 1800);
+  } catch {
+    toast("Couldn't reach the server to change edit mode.", "error");
+  }
+  reflectEditState();
+}
+
+editCheck.addEventListener("change", () => setEditMode(editCheck.checked));
+
+// Manual vault-editing actions check this first; read-only sessions get a hint.
+function requireEditUI() {
+  if (editMode) return true;
+  toast("Turn on Edit mode (top of the chat panel) to change the vault.", "info", 3000);
+  return false;
+}
+
+/* Heartbeat: keep this session alive and learn when the lock frees up. */
+async function heartbeat() {
+  try {
+    const resp = await api("/api/heartbeat", { method: "POST" });
+    if (!resp.ok) return;
+    const st = await resp.json();
+    editMode = !!st.editing;
+    editLockedByOther = !!st.lockedByOther;
+    reflectEditState();
+  } catch { /* transient */ }
+}
+setInterval(heartbeat, 8000);
+heartbeat();
+
+/* Release the lock promptly when the tab closes or navigates away. */
+window.addEventListener("pagehide", () => {
+  try { navigator.sendBeacon("/api/session/close?id=" + encodeURIComponent(CLIENT_ID)); } catch { }
+});
+
+reflectEditState();
+
 /* ---- tool activity block ---- */
 function newToolGroup() {
   const el = document.createElement("div");
@@ -411,7 +505,7 @@ async function sendMessage(text, displayText) {
   const closeTools = () => { if (toolGroup) { finalizeToolGroup(toolGroup); toolGroup = null; } };
 
   try {
-    const resp = await fetch("/api/chat", {
+    const resp = await api("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text }),
@@ -487,7 +581,7 @@ async function sendMessage(text, displayText) {
 
 async function stopGeneration() {
   try {
-    await fetch("/api/stop", { method: "POST" });
+    await api("/api/stop", { method: "POST" });
     toast("Stopping the librarian…", "info", 2000);
   } catch {
     toast("Couldn't reach the server to stop", "error");
@@ -506,7 +600,7 @@ $("#reset-btn").addEventListener("click", resetChat);
 $("#rail-new-chat").addEventListener("click", resetChat);
 
 async function resetChat() {
-  try { await fetch("/api/reset", { method: "POST" }); } catch { }
+  try { await api("/api/reset", { method: "POST" }); } catch { }
   messagesEl.replaceChildren();
   transcript = [];
   saveTranscript();
@@ -632,6 +726,7 @@ function formatSize(bytes) {
 }
 
 function stageUpload(files) {
+  if (!requireEditUI()) return;
   pendingFiles = files;
   const list = $("#upload-list");
   list.replaceChildren(...files.map((f) => {
@@ -689,7 +784,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
   for (const f of files) form.append("files", f);
 
   try {
-    const resp = await fetch("/api/upload", { method: "POST", body: form });
+    const resp = await api("/api/upload", { method: "POST", body: form });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.status);
 
@@ -1182,8 +1277,16 @@ function showViewer() {
   $("#note-body").hidden = false;
   $("#note-editor").hidden = true;
 }
+$("#note-focus").addEventListener("click", () => {
+  if (!currentNote) return;
+  if (appEl.dataset.focus === "chat") setFocusMode("split");
+  closeNotePanel();
+  enterFocusMode(currentNote.name);
+});
+
 $("#note-edit").addEventListener("click", () => {
   if (!currentNote) return;
+  if (!requireEditUI()) return;
   $("#note-source").value = currentNote.markdown;
   $("#note-body").hidden = true;
   $("#note-editor").hidden = false;
@@ -1193,7 +1296,7 @@ $("#edit-cancel-note").addEventListener("click", showViewer);
 $("#edit-save-note").addEventListener("click", async () => {
   if (!currentNote) return;
   try {
-    const resp = await fetch("/api/note", {
+    const resp = await api("/api/note", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: currentNote.name, markdown: $("#note-source").value }),
@@ -1236,6 +1339,7 @@ function renderConnections(name, markdown) {
 }
 
 function confirmUnlink(li, name, target) {
+  if (!requireEditUI()) return;
   if (li.querySelector(".conn-confirm")) return;
   const del = li.querySelector(".conn-del");
   del.hidden = true;
@@ -1245,7 +1349,7 @@ function confirmUnlink(li, name, target) {
   box.querySelector(".no").addEventListener("click", () => { box.remove(); del.hidden = false; });
   box.querySelector(".yes").addEventListener("click", async () => {
     try {
-      const resp = await fetch("/api/link", {
+      const resp = await api("/api/link", {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from: name, to: target }),
@@ -1282,12 +1386,13 @@ function renderBacklinks(name) {
 
 $("#conn-add-btn").addEventListener("click", async () => {
   if (!currentNote) return;
+  if (!requireEditUI()) return;
   const to = $("#conn-target").value.trim();
   const reason = $("#conn-reason").value.trim();
   if (!to) return;
   if (!reason) { toast("Per the vault rules, every connection needs a documented reason.", "error"); return; }
   try {
-    const resp = await fetch("/api/link", {
+    const resp = await api("/api/link", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ from: currentNote.name, to, reason }),
@@ -1453,8 +1558,10 @@ document.addEventListener("keydown", (e) => {
 --------------------------------------------------------------------------- */
 function addWelcome() {
   addAssistantMsg(
-    "Hi! I'm your vault librarian. Ask me anything about your knowledge base, " +
-    "or **drop files anywhere on this page** and I'll file them, document them, and link them into the graph.\n\n" +
+    "Hi! I'm your vault librarian. Ask me anything about your knowledge base. " +
+    "You start in **read-only** mode — tick **Edit** (top of this panel) to let me and the manual tools change the vault, " +
+    "and to **drop files anywhere on this page** for filing. Only one session can hold Edit at a time.\n\n" +
+    "Open a note and click **Focus in graph** (then pick a depth) to explore its neighborhood. " +
     "Try `/process-inbox`, `/audit`, or press **Ctrl+K** to jump to any note.",
     { save: false }
   );

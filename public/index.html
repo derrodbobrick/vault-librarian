@@ -102,6 +102,7 @@
             <div id="note-path" class="mono"></div>
           </div>
           <div class="header-actions">
+            <button id="note-focus" class="ghost-btn" title="Focus the graph on this note's neighborhood (set the depth after)">Focus in graph</button>
             <button id="note-ask" class="ghost-btn" title="Insert this note into the chat composer">Ask about this</button>
             <button id="note-edit" class="ghost-btn" title="Edit the raw markdown">Edit</button>
             <button id="note-close" class="icon-btn" title="Close (Esc)">
@@ -140,6 +141,10 @@
         <header id="dock-header">
           <h2>Librarian</h2>
           <div class="header-actions">
+            <label id="edit-toggle" class="edit-toggle" title="Read-only. Check to let the librarian and manual tools change the vault (one session at a time).">
+              <input type="checkbox" id="edit-check" />
+              <span>Edit</span>
+            </label>
             <span id="chat-status" class="chat-status" data-state="idle">idle</span>
             <button id="reset-btn" class="ghost-btn" title="Start a fresh conversation">New chat</button>
           </div>

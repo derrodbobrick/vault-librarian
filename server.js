@@ -6,6 +6,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import os from "node:os";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,49 +24,109 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 // ---------------------------------------------------------------------------
-// Chat: one librarian session, resumed across turns
+// Chat: one librarian session PER client (browser tab), resumed across turns.
+// A single global "edit lock" lets exactly one session change the vault at a
+// time; every other session is read-only until it is released.
 // ---------------------------------------------------------------------------
-let sessionId = null; // resume token for conversation continuity
-let busy = false;
-let activeQuery = null; // the in-flight query, so /api/stop can interrupt it
+const SESSION_TTL_MS = 30_000; // a session with no heartbeat this long is dropped
+
+// clientId -> { claudeSessionId, busy, activeQuery, lastSeen }
+const sessions = new Map();
+let editHolder = null; // clientId currently allowed to write, or null
+
+const clientIdOf = (req) =>
+  String(req.get("x-client-id") || req.body?.clientId || req.query?.id || "").trim();
+
+function touchSession(clientId) {
+  let s = sessions.get(clientId);
+  if (!s) {
+    s = { claudeSessionId: null, busy: false, activeQuery: null, lastSeen: 0 };
+    sessions.set(clientId, s);
+  }
+  s.lastSeen = Date.now();
+  return s;
+}
+
+function dropSession(clientId) {
+  const s = sessions.get(clientId);
+  if (s?.activeQuery?.interrupt) { try { s.activeQuery.interrupt(); } catch { /* gone */ } }
+  if (editHolder === clientId) editHolder = null;
+  sessions.delete(clientId);
+}
+
+// What a session is allowed to know about the edit lock.
+const editStatus = (clientId) => ({
+  editing: editHolder === clientId,
+  lockedByOther: editHolder !== null && editHolder !== clientId,
+});
+
+// Evict sessions whose tab went away (heartbeat stopped), freeing the lock.
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, s] of sessions) if (now - s.lastSeen > SESSION_TTL_MS) dropSession(id);
+}, 10_000).unref();
+
+// Tools the librarian may use. Read-only sessions can answer questions and
+// research, but cannot create, edit, move, or delete anything in the vault.
+const READONLY_TOOLS = ["Read", "Glob", "Grep", "TodoWrite", "WebSearch", "WebFetch", "Task"];
+const EDIT_TOOLS = [...READONLY_TOOLS, "Write", "Edit", "Bash(git *)", "Bash(obsidian *)"];
+
+// Guard for endpoints that mutate the vault — only the edit-lock holder passes.
+function requireEdit(req, res) {
+  const clientId = clientIdOf(req);
+  if (!clientId || editHolder !== clientId) {
+    res.status(403).json({ error: "This session is read-only. Turn on Edit mode to make changes." });
+    return false;
+  }
+  touchSession(clientId);
+  return true;
+}
 
 app.post("/api/chat", async (req, res) => {
+  const clientId = clientIdOf(req);
+  if (!clientId) return res.status(400).json({ error: "missing client id" });
   const userMessage = (req.body?.message || "").trim();
   if (!userMessage) return res.status(400).json({ error: "empty message" });
-  if (busy) return res.status(409).json({ error: "The librarian is still working on the previous request." });
-  busy = true;
+  const session = touchSession(clientId);
+  if (session.busy) return res.status(409).json({ error: "The librarian is still working on your previous request." });
+  session.busy = true;
+
+  const canEdit = editHolder === clientId;
 
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
   const send = (obj) => res.write(JSON.stringify(obj) + "\n");
 
   try {
+    // In read-only mode the write tools are withheld entirely; this note just
+    // keeps the librarian from trying (and failing) to edit, so it explains
+    // instead. The tool allow-list is the real enforcement.
+    const prompt = canEdit
+      ? userMessage
+      : `${userMessage}\n\n[System: this session is READ-ONLY. Answer from the knowledge base, but do not create, edit, move, or delete any notes or files. If asked to make changes, explain that Edit mode must be enabled.]`;
+
     const q = query({
-      prompt: userMessage,
+      prompt,
       options: {
         cwd: VAULT,
         systemPrompt: { type: "preset", preset: "claude_code" },
         settingSources: ["user", "project", "local"],
-        // Auto-approve only the tools a vault librarian needs; everything
-        // else is denied rather than prompting (there is no UI to answer).
+        // Auto-approve only the tools this session is allowed; everything else
+        // is denied rather than prompting (there is no UI to answer).
         permissionMode: "dontAsk",
-        allowedTools: [
-          "Read", "Write", "Edit", "Glob", "Grep",
-          "TodoWrite", "WebSearch", "WebFetch", "Task",
-          "Bash(git *)", "Bash(obsidian *)",
-        ],
+        allowedTools: canEdit ? EDIT_TOOLS : READONLY_TOOLS,
         maxTurns: 150,
         // Stream token-level deltas so the UI can render text as it arrives.
         includePartialMessages: true,
-        ...(sessionId ? { resume: sessionId } : {}),
+        ...(session.claudeSessionId ? { resume: session.claudeSessionId } : {}),
       },
     });
-    activeQuery = q;
+    session.activeQuery = q;
 
     for await (const msg of q) {
       if (msg.type === "system" && msg.subtype === "init") {
-        sessionId = msg.session_id || sessionId;
-        send({ kind: "session", id: sessionId });
+        session.claudeSessionId = msg.session_id || session.claudeSessionId;
+        send({ kind: "session", id: session.claudeSessionId });
       } else if (msg.type === "stream_event") {
         // Token deltas for the top-level assistant only (subagents stay quiet);
         // the full "text" event that follows is the authoritative content.
@@ -87,7 +148,7 @@ app.post("/api/chat", async (req, res) => {
           }
         }
       } else if (msg.type === "result") {
-        sessionId = msg.session_id || sessionId;
+        session.claudeSessionId = msg.session_id || session.claudeSessionId;
         send({
           kind: "result",
           ok: msg.subtype === "success",
@@ -100,14 +161,15 @@ app.post("/api/chat", async (req, res) => {
   } catch (err) {
     send({ kind: "error", message: String(err?.message || err) });
   } finally {
-    busy = false;
-    activeQuery = null;
+    session.busy = false;
+    session.activeQuery = null;
     res.end();
   }
 });
 
 app.post("/api/stop", async (req, res) => {
-  const q = activeQuery;
+  const s = sessions.get(clientIdOf(req));
+  const q = s?.activeQuery;
   if (q && typeof q.interrupt === "function") {
     try { await q.interrupt(); } catch { /* already finished */ }
     return res.json({ ok: true });
@@ -116,7 +178,38 @@ app.post("/api/stop", async (req, res) => {
 });
 
 app.post("/api/reset", (req, res) => {
-  sessionId = null;
+  const clientId = clientIdOf(req);
+  const s = clientId ? touchSession(clientId) : null;
+  if (s) s.claudeSessionId = null;
+  res.json({ ok: true });
+});
+
+// Heartbeat keeps a session alive and reports the current edit-lock state, so
+// a waiting tab learns the moment the lock is released by whoever held it.
+app.post("/api/heartbeat", (req, res) => {
+  const clientId = clientIdOf(req);
+  if (!clientId) return res.status(400).json({ error: "missing client id" });
+  touchSession(clientId);
+  res.json(editStatus(clientId));
+});
+
+// Claim (want:true) or release (want:false) the single edit lock.
+app.post("/api/edit", (req, res) => {
+  const clientId = clientIdOf(req);
+  if (!clientId) return res.status(400).json({ error: "missing client id" });
+  touchSession(clientId);
+  if (req.body?.want) {
+    if (editHolder === null || editHolder === clientId) editHolder = clientId;
+  } else if (editHolder === clientId) {
+    editHolder = null;
+  }
+  res.json(editStatus(clientId));
+});
+
+// Tab is closing (navigator.sendBeacon) — drop the session and free the lock.
+app.post("/api/session/close", (req, res) => {
+  const clientId = clientIdOf(req);
+  if (clientId) dropSession(clientId);
   res.json({ ok: true });
 });
 
@@ -175,6 +268,7 @@ function uniquePath(dir, name) {
 // never needs shell access: binaries are filed into Meta/Attachments at
 // upload time, and spreadsheets are pre-extracted to text the agent can Read.
 app.post("/api/upload", upload.array("files", 20), async (req, res) => {
+  if (!requireEdit(req, res)) return;
   const attachmentsDir = path.join(VAULT, "Meta", "Attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
 
@@ -272,6 +366,7 @@ function appendActivity(entry) {
 }
 
 app.put("/api/note", (req, res) => {
+  if (!requireEdit(req, res)) return;
   const name = String(req.body?.name || "");
   const markdown = String(req.body?.markdown ?? "");
   const file = findNoteByName(name);
@@ -309,6 +404,7 @@ function removeLinks(file, target) {
 }
 
 app.post("/api/link", (req, res) => {
+  if (!requireEdit(req, res)) return;
   const { from, to, reason } = req.body || {};
   const fileA = findNoteByName(String(from || ""));
   const fileB = findNoteByName(String(to || ""));
@@ -321,6 +417,7 @@ app.post("/api/link", (req, res) => {
 });
 
 app.delete("/api/link", (req, res) => {
+  if (!requireEdit(req, res)) return;
   const { from, to } = req.body || {};
   const fileA = findNoteByName(String(from || ""));
   const fileB = findNoteByName(String(to || ""));
@@ -412,7 +509,24 @@ function buildGraph() {
   return { nodes: [...nodes.values()], links };
 }
 
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`Vault Librarian running at http://localhost:${PORT}`);
+// Collect this machine's LAN IPv4 addresses so we can print reachable URLs.
+function lanAddresses() {
+  const out = [];
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const i of ifaces || []) {
+      if (i.family === "IPv4" && !i.internal) out.push(i.address);
+    }
+  }
+  return out;
+}
+
+// Bind on 0.0.0.0 so other devices on the same Wi-Fi/LAN can reach the app.
+// NOTE: there is no authentication — anyone who can reach this URL can use the
+// librarian (which spends your Claude account) and, in Edit mode, change files.
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Vault Librarian running:`);
+  console.log(`  local:    http://localhost:${PORT}`);
+  for (const ip of lanAddresses()) console.log(`  network:  http://${ip}:${PORT}`);
   console.log(`Vault: ${VAULT}`);
+  console.log(`Open to the local network with NO password — only run this on a network you trust.`);
 });
