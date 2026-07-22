@@ -7,13 +7,18 @@ usually carry the real intent of an OT tracker/workbook:
   * formulas alongside values
   * hyperlinks, cell comments/notes
   * charts and embedded images (listed; pulled out where possible)
-  * a full-page visual render of each sheet via LibreOffice
+
+Rendered for the viewer as scrollable HTML tables (one per sheet, colours and
+merges preserved) rather than LibreOffice PDF pages — a wide sheet paginated to
+PDF becomes many near-empty narrow pages, whereas the table keeps every column.
 """
 from __future__ import annotations
 
 import os
 
 from .common import Bundle
+# NB: spreadsheets no longer use LibreOffice page rendering (they render to HTML
+# tables via _build_html) — that is why `render` is not imported here.
 
 MAX_ROWS = 4000       # per sheet safety cap for the text dump
 HTML_CAP_ROWS = 800   # per sheet cap for the HTML table view
@@ -113,7 +118,7 @@ def extract(src: str, out_dir: str, max_pages: int = 0) -> dict:
                 titles.append(f"{type(ch).__name__.replace('Chart','')} chart"
                               + (f' "{t}"' if t else ""))
             b.add(f"Charts ({len(charts)}): {'; '.join(titles)}  "
-                  "→ see the sheet render to read them.")
+                  "(open the original workbook to view the chart visuals).")
 
         images = getattr(ws_f, "_images", []) or []
         for img in images:

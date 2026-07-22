@@ -1,0 +1,11 @@
+# Normalize line endings to LF everywhere (stops the LF->CRLF churn on Windows).
+* text=auto eol=lf
+
+# Binary assets — never touch line endings.
+*.woff2 binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

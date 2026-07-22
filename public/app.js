@@ -1778,7 +1778,6 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const isOpen = (t) => t.status !== "done" && t.status !== "cancelled";
 const isOverdue = (t) => t.due && t.due < todayISO() && isOpen(t);
 let dashCalMonth = null;   // {y, m} shown month for the calendar (m 0-indexed)
-let lastTasks = [];        // cache so the calendar can re-render on nav
 
 async function loadDashboards() {
   const grid = $("#dash-grid"), stats = $("#dash-stats");
