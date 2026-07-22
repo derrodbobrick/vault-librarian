@@ -1,2 +1,7 @@
 node_modules/
 extractions/
+
+# Secrets — never commit. Holds SMARTSHEET_ACCESS_TOKEN (and later JIRA_* creds).
+.env
+.env.*
+!.env.example
