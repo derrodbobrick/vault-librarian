@@ -829,6 +829,11 @@ function stageUpload(files) {
     return li;
   }));
   $("#upload-desc").value = "";
+  const planning = currentPage === "project" || currentPage === "dashboards";
+  const modeEl = $("#upload-mode");
+  setHtml(modeEl, planning
+    ? `🗂️ <b>Project-planning mode</b> — tasks & events found in these files will be created under the relevant project.`
+    : `📚 <b>Knowledge mode</b> — any tasks or upcoming events found will be <b>proposed</b> for your approval, not auto-created.`);
   dialog.showModal();
 }
 
@@ -940,6 +945,8 @@ $("#upload-form").addEventListener("submit", async (e) => {
     if (data.warnings?.length)
       lines.push(`Warnings:\n${data.warnings.map((w) => `- ${w}`).join("\n")}`);
 
+    const planningMode = currentPage === "project" || currentPage === "dashboards";
+
     let msg = `I just dropped file(s) into the vault.\n\n${lines.join("\n\n")}\n\n`;
     if (desc) msg += `About these files / where they should go: ${desc}\n\n`;
     msg += `Please process them as the librarian:\n` +
@@ -948,10 +955,20 @@ $("#upload-form").addEventListener("submit", async (e) => {
       `capture the document's actual intent and sentiment, not just a keyword summary.\n` +
       `2. Write or update markdown notes documenting the knowledge with proper frontmatter and [[wikilinks]]. ` +
       `Describe what charts/tables/diagrams show. Embed the original file or key images with ![[filename]] where useful.\n` +
-      `3. Link the new notes into the relevant hub (program note, Smart Wiki, or org entity).\n` +
-      `Then summarize what you did and what each document was really about.`;
+      `3. Link the new notes into the relevant hub (program note, Smart Wiki, or org entity).\n`;
+    if (planningMode) {
+      msg += `4. PROJECT-PLANNING MODE is on: if the document defines tasks, milestones, or dated events, ` +
+        `create them as \`type: task\`/\`event\` notes under the most relevant project (schema + linking rules ` +
+        `R9–R12: one project parent, assignee→person, depends-on, dates), then confirm what you added.\n`;
+    } else {
+      msg += `4. If the document contains action items, deadlines, or upcoming events, do NOT create them — instead ` +
+        `LIST them and PROPOSE adding them to the project-management graph, recommending the project each belongs ` +
+        `under, and ask me to confirm before creating any task/event note (per the R6 default).\n`;
+    }
+    msg += `Then summarize what you did and what each document was really about.`;
 
-    const display = `Process ${files.length} uploaded file${files.length > 1 ? "s" : ""}` + (desc ? ` — ${desc}` : "");
+    const display = `Process ${files.length} uploaded file${files.length > 1 ? "s" : ""}` +
+      (planningMode ? " (planning mode)" : "") + (desc ? ` — ${desc}` : "");
     sendMessage(msg, display);
   } catch (err) {
     card.querySelector(".sys-title span").textContent = "Upload failed";
