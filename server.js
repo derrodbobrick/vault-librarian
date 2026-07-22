@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import os from "node:os";
+import * as smartsheet from "./smartsheet.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -414,6 +415,45 @@ app.get("/api/tasks", (req, res) => {
       });
     }
     res.json({ tasks });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Smartsheet: list sheets and import one into the vault (project + task notes),
+// upserting by row id so re-imports update rather than duplicate.
+// ---------------------------------------------------------------------------
+app.get("/api/smartsheet/sheets", async (req, res) => {
+  if (!process.env.SMARTSHEET_ACCESS_TOKEN) {
+    return res.status(400).json({ error: "SMARTSHEET_ACCESS_TOKEN is not set in .env" });
+  }
+  try {
+    const sheets = await smartsheet.listSheets();
+    res.json({
+      sheets: sheets.map((s) => ({ id: s.id, name: s.name, modifiedAt: s.modifiedAt, permalink: s.permalink })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+app.post("/api/smartsheet/import", async (req, res) => {
+  if (!requireEdit(req, res)) return;
+  const { sheetId, program, projectTitle } = req.body || {};
+  if (!sheetId) return res.status(400).json({ error: "sheetId is required" });
+  if (!program || !projectTitle) return res.status(400).json({ error: "program and projectTitle are required" });
+  try {
+    const cfg = {
+      program: String(program), projectTitle: String(projectTitle),
+      contextLinks: [], today: new Date().toISOString().slice(0, 10),
+    };
+    const summary = await smartsheet.importToVault({ sheetId, vault: VAULT, cfg });
+    appendActivity(
+      `Imported the Smartsheet "${summary.sheetName}" into ${summary.program}/${summary.project} ` +
+      `via the UI: ${summary.created} new, ${summary.updated} updated task notes.`
+    );
+    res.json({ ok: true, ...summary });
   } catch (err) {
     res.status(500).json({ error: String(err?.message || err) });
   }

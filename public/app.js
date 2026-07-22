@@ -1812,6 +1812,65 @@ async function loadDashboards() {
 }
 $("#dash-refresh").addEventListener("click", loadDashboards);
 
+/* Smartsheet import dialog */
+const ssDialog = $("#ss-dialog");
+$("#dash-import").addEventListener("click", openSmartsheetImport);
+
+async function openSmartsheetImport() {
+  if (!requireEditUI()) return;
+  const sel = $("#ss-sheet");
+  sel.replaceChildren();
+  $("#ss-title").value = ""; $("#ss-program").value = "";
+  const progs = [...new Set(graphData.nodes.filter((n) => n.type === "program").map((n) => n.id))].sort();
+  $("#ss-programs").replaceChildren(...progs.map((p) => { const o = document.createElement("option"); o.value = p; return o; }));
+  $("#ss-status").textContent = "Loading your sheets…";
+  ssDialog.showModal();
+  try {
+    const resp = await api("/api/smartsheet/sheets");
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || resp.status);
+    const sheets = (data.sheets || []).sort((a, b) => a.name.localeCompare(b.name));
+    sel.replaceChildren(...sheets.map((s) => {
+      const o = document.createElement("option");
+      o.value = s.id; o.textContent = s.name; o.dataset.name = s.name;
+      return o;
+    }));
+    const prefill = () => {
+      const opt = sel.selectedOptions[0];
+      if (opt && !$("#ss-title").value) $("#ss-title").value = opt.dataset.name.replace(/\s*-\s*v\d+$/i, "").trim();
+    };
+    sel.addEventListener("change", () => { $("#ss-title").value = ""; prefill(); });
+    prefill();
+    $("#ss-status").textContent = `${sheets.length} sheets available. Rows become tasks; re-importing updates in place.`;
+  } catch (err) {
+    $("#ss-status").textContent = "Couldn't load sheets — " + err.message;
+  }
+}
+
+$("#ss-cancel").addEventListener("click", () => ssDialog.close());
+$("#ss-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const sheetId = $("#ss-sheet").value;
+  const program = $("#ss-program").value.trim();
+  const projectTitle = $("#ss-title").value.trim();
+  if (!sheetId || !program || !projectTitle) { toast("Choose a sheet, a program, and a title.", "error"); return; }
+  ssDialog.close();
+  toast("Importing from Smartsheet…", "info", 6000);
+  try {
+    const resp = await api("/api/smartsheet/import", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sheetId, program, projectTitle }),
+    });
+    const d = await resp.json();
+    if (!resp.ok) throw new Error(d.error || resp.status);
+    toast(`Imported "${d.project}" — ${d.created} new, ${d.updated} updated task${d.updated === 1 ? "" : "s"}.`, "success", 5000);
+    await loadGraph({ keepView: true });
+    if (currentPage === "dashboards") loadDashboards();
+  } catch (err) {
+    toast("Smartsheet import failed — " + err.message, "error", 6000);
+  }
+});
+
 function statTile(num, label, alert) {
   const d = document.createElement("div");
   d.className = "stat-tile" + (alert ? " alert" : "");

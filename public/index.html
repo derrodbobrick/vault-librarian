@@ -104,7 +104,10 @@
       <div id="dashboards" hidden>
         <div class="dash-toolbar">
           <div class="dash-stats" id="dash-stats"></div>
-          <button id="dash-refresh" class="ghost-btn" title="Reload tasks">Refresh</button>
+          <div class="dash-tools">
+            <button id="dash-import" class="ghost-btn" title="Import a Smartsheet project plan into the vault">⧉ Import from Smartsheet</button>
+            <button id="dash-refresh" class="ghost-btn" title="Reload tasks">Refresh</button>
+          </div>
         </div>
         <div class="dash-grid" id="dash-grid"></div>
       </div>
@@ -229,6 +232,25 @@
       <menu>
         <button type="button" id="upload-cancel" class="ghost-btn">Cancel</button>
         <button type="submit" id="upload-send" class="primary-btn">Upload &amp; process</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <!-- ============ Smartsheet import ============ -->
+  <dialog id="ss-dialog">
+    <form id="ss-form" method="dialog">
+      <h3>Import from Smartsheet</h3>
+      <p id="ss-status" class="upload-mode"></p>
+      <label for="ss-sheet">Sheet</label>
+      <select id="ss-sheet"></select>
+      <label for="ss-program">Program it belongs under</label>
+      <input id="ss-program" list="ss-programs" placeholder="e.g. Spec2Saw" autocomplete="off" />
+      <datalist id="ss-programs"></datalist>
+      <label for="ss-title">Project note title</label>
+      <input id="ss-title" placeholder="Name for the project in the vault" autocomplete="off" />
+      <menu>
+        <button type="button" id="ss-cancel" class="ghost-btn">Cancel</button>
+        <button type="submit" id="ss-go" class="primary-btn">Import</button>
       </menu>
     </form>
   </dialog>

@@ -1131,3 +1131,12 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); }
   border-radius: 8px; padding: 8px 11px; margin: 2px 0 12px;
 }
 .upload-mode b { color: var(--text); font-weight: 600; }
+
+/* Smartsheet import */
+.dash-tools { display: flex; gap: 8px; }
+#ss-dialog label { display: block; font: 600 11px/1 var(--font-ui); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 0 5px; }
+#ss-dialog select, #ss-dialog input {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2, var(--surface)); color: var(--text); font: 13px/1.3 var(--font-ui);
+}
+#ss-dialog select:focus, #ss-dialog input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }

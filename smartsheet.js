@@ -6,6 +6,8 @@
 //
 // Auth: SMARTSHEET_ACCESS_TOKEN in the environment (loaded from .env, git-ignored).
 import "dotenv/config";
+import fs from "node:fs";
+import path from "node:path";
 import client from "smartsheet";
 
 const SHEET_INCLUDES =
@@ -195,7 +197,8 @@ export function renderProjectNote(project, people, cfg) {
 }
 
 export function renderTaskNote(t, project, cfg) {
-  const fm = ["---", "type: task", `status: ${t.status}`, `priority: ${t.priority}`, "created: " + cfg.today];
+  const fm = ["---", "type: task", `status: ${t.status}`, `priority: ${t.priority}`,
+    "created: " + (t.created || cfg.today)];
   if (t.due) fm.push("due: " + t.due);
   if (t.scheduled) fm.push("scheduled: " + t.scheduled);
   fm.push(`project: "[[${project.name}]]"`);
@@ -228,4 +231,87 @@ export function renderPersonNote(p, project, cfg) {
     `Works on [[${project.name}]] as ${role} (from the Smartsheet project plan). Outside the OT department.`, "",
     "## Related", `- [[${project.name}]] — ${role} on this project`];
   return fm.join("\n") + body.join("\n") + "\n";
+}
+
+// ---- import to the vault (with row-id upsert) ------------------------------
+
+const IGNORE_DIRS = new Set([".obsidian", ".claude", ".git", ".trash", "OT Dashboard"]);
+
+// Map every existing task note's smartsheet_row_id -> its absolute path, so a
+// re-import updates the same note instead of creating a duplicate.
+export function indexTasksByRowId(vault) {
+  const idx = new Map();
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!IGNORE_DIRS.has(e.name)) walk(p); }
+      else if (e.name.endsWith(".md")) {
+        const m = fs.readFileSync(p, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+        const r = m && m[1].match(/^smartsheet_row_id:\s*(\d+)/m);
+        if (r) idx.set(r[1], p);
+      }
+    }
+  };
+  walk(vault);
+  return idx;
+}
+
+// Import a Smartsheet sheet into the vault as project + task + person notes.
+// Upserts tasks by smartsheet_row_id (renaming on title change so links resolve),
+// and never clobbers an existing project or person note (preserves manual edits
+// such as R12 concept links). Returns a summary.
+export async function importToVault({ sheetId, sheetName, vault, cfg, ss }) {
+  ss = ss || createClient();
+  let meta = sheetId ? { id: sheetId } : await findSheet(sheetName, ss);
+  if (!meta) throw new Error("Smartsheet sheet not found");
+  const sheet = await getSheet(meta.id, ss);
+  const dir = await buildUserDirectory(ss);
+  const { project, tasks, people } = mapSheet(sheet, dir, cfg);
+
+  cfg.existingPeople = new Set(
+    fs.readdirSync(path.join(vault, "Org")).filter((f) => f.endsWith(".md")).map((f) => f.replace(/\.md$/, ""))
+  );
+  const rowIdx = indexTasksByRowId(vault);
+
+  const programDir = path.join(vault, "Projects", cfg.program);
+  const projectDir = path.join(programDir, project.name);
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.mkdirSync(path.join(vault, "Org"), { recursive: true });
+
+  // Project note: create only if absent (preserve manual curation on re-import).
+  const projPath = path.join(programDir, project.name + ".md");
+  let projectCreated = false;
+  if (!fs.existsSync(projPath)) { fs.writeFileSync(projPath, renderProjectNote(project, people, cfg)); projectCreated = true; }
+
+  let created = 0, updated = 0;
+  for (const t of tasks) {
+    const desired = path.join(projectDir, t.name + ".md");
+    const existing = rowIdx.get(String(t.rowId));
+    if (existing) {
+      // preserve the original creation date across re-imports
+      const fmm = fs.readFileSync(existing, "utf8").match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      const cm = fmm && fmm[1].match(/^created:\s*(.+)$/m);
+      if (cm) t.created = cm[1].trim();
+    }
+    fs.writeFileSync(desired, renderTaskNote(t, project, cfg));
+    if (existing) {
+      updated++;
+      if (path.resolve(existing) !== path.resolve(desired)) {
+        try { fs.unlinkSync(existing); } catch { /* renamed on title change */ }
+      }
+    } else {
+      created++;
+    }
+  }
+
+  let newPeople = 0;
+  for (const p of people) {
+    const note = renderPersonNote(p, project, cfg);
+    if (note) { fs.writeFileSync(path.join(vault, "Org", p.name + ".md"), note); newPeople++; }
+  }
+
+  return {
+    project: project.name, program: cfg.program, sheetId: meta.id, sheetName: sheet.name,
+    tasks: tasks.length, created, updated, newPeople, projectCreated,
+  };
 }
