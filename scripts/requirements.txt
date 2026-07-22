@@ -1,0 +1,17 @@
+# Python dependencies for the vault-librarian extraction pipeline.
+# Install with:  python -m pip install -r scripts/requirements.txt
+#
+# LibreOffice (the `soffice` binary) is a separate SYSTEM dependency used to
+# render Office documents to page images. Install it via winget:
+#   winget install --id TheDocumentFoundation.LibreOffice
+# The pipeline degrades gracefully (rich text, no full-page renders) if it is absent.
+
+openpyxl>=3.1        # .xlsx / .xlsm structured extraction
+pymupdf>=1.24        # PDF text/tables/images + page rendering (imported as `fitz`)
+python-docx>=1.1     # .docx structured extraction
+python-pptx>=0.6     # .pptx slides / notes / shapes
+pillow>=10           # image metadata + normalisation
+extract-msg>=0.48    # Outlook .msg emails
+striprtf>=0.0.26     # .rtf fallback text
+beautifulsoup4>=4.12 # .html / .eml body parsing
+markdownify>=0.11    # HTML -> Markdown conversion

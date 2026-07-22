@@ -788,33 +788,74 @@ $("#upload-form").addEventListener("submit", async (e) => {
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || resp.status);
 
+    // index extraction bundles by their original filename for row annotation
+    const bundleByName = new Map();
+    for (const b of data.bundles || []) bundleByName.set(b.originalName, b);
+
+    const rowNote = (name) => {
+      const b = bundleByName.get(name);
+      if (!b) return "";
+      const bits = [];
+      if (b.pageCount) bits.push(`${b.pageCount} page${b.pageCount > 1 ? "s" : ""} rendered`);
+      if (b.media?.length) bits.push(`${b.media.length} image${b.media.length > 1 ? "s" : ""}`);
+      return bits.length ? ` · ${bits.join(" · ")}` : "";
+    };
+
     for (const p of data.kept || []) {
-      setRow(p.split("/").pop(), `<span class="f-dest">→ Inbox/Uploads</span>`, "ok");
+      const name = p.split("/").pop();
+      setRow(name, `<span class="f-dest">→ Inbox/Uploads${rowNote(name)}</span>`, "ok");
     }
     for (const p of data.attachments || []) {
-      setRow(p.split("/").pop(), `<span class="f-dest">→ Meta/Attachments</span>`, "ok");
+      const name = p.split("/").pop();
+      setRow(name, `<span class="f-dest">→ Meta/Attachments${rowNote(name)}</span>`, "ok");
     }
     for (const w of data.warnings || []) {
       addStatus(w, true);
     }
     card.querySelector(".sys-title span").textContent = "Files staged — handing to the librarian";
 
+    const dirOf = (p) => p.slice(0, p.lastIndexOf("/"));
     const lines = [];
     if (data.kept?.length)
       lines.push(`Text files in Inbox/Uploads (read these directly):\n${data.kept.map((p) => `- ${p}`).join("\n")}`);
     if (data.attachments?.length)
-      lines.push(`Binary files already filed into Meta/Attachments (do NOT move them):\n${data.attachments.map((p) => `- ${p}`).join("\n")}`);
-    if (data.extracted?.length)
-      lines.push(`Spreadsheet contents pre-extracted to text at these absolute paths (Read them for the sheet data):\n${data.extracted.map((p) => `- ${p}`).join("\n")}`);
+      lines.push(`Original files filed into Meta/Attachments (do NOT move them; embed with ![[filename]] if relevant):\n${data.attachments.map((p) => `- ${p}`).join("\n")}`);
+
+    // Rich extraction bundles: text extraction + full-page renders + media.
+    for (const b of data.bundles || []) {
+      const parts = [`### ${b.originalName} (${b.kind})`];
+      if (b.originalPath) parts.push(`- Original: ${b.originalPath}`);
+      else if (b.viaEmail) parts.push(`- Extracted from an email attachment`);
+      parts.push(`- Text & structure extraction (Read this first): ${b.textFile}`);
+      if (b.pageCount) {
+        parts.push(`- Full-page RENDERS — Read these images to SEE the layout, ` +
+          `charts, graphs, tables and visual intent (${b.pageCount} page${b.pageCount > 1 ? "s" : ""}): ` +
+          `${dirOf(b.pages[0])}/  (page-001.png … page-${String(b.pageCount).padStart(3, "0")}.png)`);
+      }
+      if (b.media?.length) {
+        parts.push(`- Embedded images/charts pulled out (${b.media.length}) — Read to interpret: ` +
+          `${dirOf(b.media[0].path)}/`);
+      }
+      const metaBits = Object.entries(b.meta || {})
+        .filter(([k, v]) => v && !Array.isArray(v) && typeof v !== "object" && String(v).length < 80)
+        .map(([k, v]) => `${k}=${v}`);
+      if (metaBits.length) parts.push(`- Metadata: ${metaBits.join(", ")}`);
+      lines.push(parts.join("\n"));
+    }
+
     if (data.warnings?.length)
       lines.push(`Warnings:\n${data.warnings.map((w) => `- ${w}`).join("\n")}`);
 
     let msg = `I just dropped file(s) into the vault.\n\n${lines.join("\n\n")}\n\n`;
     if (desc) msg += `About these files / where they should go: ${desc}\n\n`;
-    msg += `Please process them as the librarian: read the content (PDFs and images can be Read at their ` +
-      `attachment path; spreadsheets via the extracted .txt), write or update markdown notes documenting ` +
-      `the knowledge with proper frontmatter and [[wikilinks]] (embed attachments with ![[filename]]), ` +
-      `and link the new notes into the relevant hub (program note, Smart Wiki, or org entity). Summarize what you did.`;
+    msg += `Please process them as the librarian:\n` +
+      `1. For each extraction bundle, Read the text/structure extraction AND Read every full-page render image ` +
+      `so you understand not just the words but the page LAYOUT, and any charts, graphs, tables, and figures — ` +
+      `capture the document's actual intent and sentiment, not just a keyword summary.\n` +
+      `2. Write or update markdown notes documenting the knowledge with proper frontmatter and [[wikilinks]]. ` +
+      `Describe what charts/tables/diagrams show. Embed the original file or key images with ![[filename]] where useful.\n` +
+      `3. Link the new notes into the relevant hub (program note, Smart Wiki, or org entity).\n` +
+      `Then summarize what you did and what each document was really about.`;
 
     const display = `Process ${files.length} uploaded file${files.length > 1 ? "s" : ""}` + (desc ? ` — ${desc}` : "");
     sendMessage(msg, display);

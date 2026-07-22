@@ -70,11 +70,21 @@ Step "Obsidian"
 $obs = winget list --id Obsidian.Obsidian 2>$null | Select-String "Obsidian"
 if ($obs) { Ok "already installed" } else { Winget-Install "Obsidian.Obsidian" "Obsidian" }
 
-Step "openpyxl (spreadsheet extraction for librarian uploads)"
-if (-not (Act "pip install openpyxl")) {
-    python -m pip install --quiet openpyxl
-    Ok "openpyxl ready"
+Step "Python extraction libraries (PDF/Office/image/email ingestion)"
+if (-not (Act "pip install -r vault-librarian/scripts/requirements.txt")) {
+    $reqs = Join-Path $APP_DIR "scripts\requirements.txt"
+    if (Test-Path $reqs) {
+        python -m pip install --quiet -r $reqs
+    } else {
+        # first run: repo not cloned yet, install the core set directly
+        python -m pip install --quiet openpyxl pymupdf python-docx python-pptx pillow extract-msg striprtf beautifulsoup4 markdownify
+    }
+    Ok "extraction libraries ready"
 }
+
+Step "LibreOffice (renders Office docs to page images for the librarian)"
+$lo = winget list --id TheDocumentFoundation.LibreOffice 2>$null | Select-String "LibreOffice"
+if ($lo) { Ok "already installed" } else { Winget-Install "TheDocumentFoundation.LibreOffice" "LibreOffice" }
 
 Step "Claude Code (powers the librarian chat agent)"
 if (Have "claude") { Ok "already installed: $(claude --version 2>$null)" }

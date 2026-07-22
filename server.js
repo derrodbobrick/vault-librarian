@@ -244,13 +244,46 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 200 * 1024 * 1024 } });
 
-// Text formats the agent can Read directly — these stay in Inbox/Uploads.
-const TEXT_EXTS = new Set([
-  ".md", ".txt", ".csv", ".tsv", ".json", ".yaml", ".yml", ".xml", ".html",
+// Pure-text formats the agent Reads directly — kept in Inbox/Uploads, no
+// extraction needed (they are already readable and carry no hidden layout).
+const PASSTHROUGH_EXTS = new Set([
+  ".md", ".txt", ".yaml", ".yml", ".xml",
   ".js", ".ts", ".py", ".css", ".ini", ".toml", ".log", ".base", ".canvas",
 ]);
-// Binary formats the agent's Read tool can still open at their filed location.
-const XLSX_EXTS = new Set([".xlsx", ".xlsm"]);
+// Text-based but worth an extraction *profile* (schema, structure, samples);
+// the original stays readable in Inbox/Uploads.
+const TEXT_EXTRACT_EXTS = new Set([".csv", ".tsv", ".json", ".html", ".htm"]);
+// Everything the Python extraction pipeline understands. Binary members are
+// filed into Meta/Attachments; text members (above) stay in Inbox/Uploads.
+const EXTRACT_EXTS = new Set([
+  ".pdf", ".xlsx", ".xlsm", ".docx", ".pptx", ".doc", ".xls", ".ppt",
+  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp",
+  ".csv", ".tsv", ".json", ".html", ".htm", ".rtf", ".eml", ".msg",
+]);
+
+const PYTHON = process.env.PYTHON || "python";
+const EXTRACT_SCRIPT = path.join(__dirname, "scripts", "extract.py");
+// Extraction bundles (text + page renders + media) live OUTSIDE the vault so
+// they never clutter the graph; the agent reads them by absolute path.
+const EXTRACT_DIR = path.join(__dirname, "extractions");
+
+// Run the extraction dispatcher on one file; returns the parsed JSON manifest.
+async function runExtract(absSource, outDir) {
+  const { stdout } = await execFileAsync(
+    PYTHON, [EXTRACT_SCRIPT, absSource, outDir],
+    { timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }
+  );
+  return JSON.parse(stdout);
+}
+
+let extractSeq = 0;
+function uniqueExtractDir(filename) {
+  const base = path.basename(filename, path.extname(filename))
+    .replace(/[^\w.-]+/g, "_").slice(0, 40) || "file";
+  const dir = path.join(EXTRACT_DIR, `${Date.now()}-${extractSeq++}-${base}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 const rel = (abs) => path.relative(VAULT, abs).split(path.sep).join("/");
 
@@ -264,58 +297,85 @@ function uniquePath(dir, name) {
   return out;
 }
 
-// Binary handling is done here in deterministic server code, so the agent
-// never needs shell access: binaries are filed into Meta/Attachments at
-// upload time, and spreadsheets are pre-extracted to text the agent can Read.
+// Email attachments come back as media files inside the email's bundle; feed
+// each supported one back through the pipeline as its own bundle.
+async function ingestEmailAttachments(manifest, bundles, warnings) {
+  if (manifest.kind !== "email") return;
+  for (const m of manifest.media || []) {
+    const ext = path.extname(m.path).toLowerCase();
+    if (!EXTRACT_EXTS.has(ext)) continue;
+    try {
+      const sub = await runExtract(m.path, uniqueExtractDir(path.basename(m.path)));
+      if (sub.ok) {
+        bundles.push({ originalName: path.basename(m.path), originalPath: null,
+          viaEmail: manifest.source, ...sub });
+      }
+    } catch { /* best effort — the email body is already captured */ }
+  }
+}
+
+// Deterministic server-side ingestion: file each upload, then run the Python
+// extraction pipeline so the agent receives rich text + page renders + media it
+// can Read, never needing shell access. Binaries land in Meta/Attachments;
+// text-based files stay in Inbox/Uploads; every supported type also gets an
+// extraction bundle in EXTRACT_DIR (outside the vault).
 app.post("/api/upload", upload.array("files", 20), async (req, res) => {
   if (!requireEdit(req, res)) return;
   const attachmentsDir = path.join(VAULT, "Meta", "Attachments");
   fs.mkdirSync(attachmentsDir, { recursive: true });
+  fs.mkdirSync(EXTRACT_DIR, { recursive: true });
 
   const kept = [];        // text files left in Inbox/Uploads
   const attachments = []; // binaries filed into Meta/Attachments
-  const extracted = [];   // text extractions of binaries, in Inbox/Uploads
+  const bundles = [];     // extraction bundles (text + page renders + media)
   const warnings = [];
 
   for (const f of req.files || []) {
     const ext = path.extname(f.filename).toLowerCase();
-    if (TEXT_EXTS.has(ext)) {
-      kept.push(rel(f.path));
-      continue;
+    const isText = PASSTHROUGH_EXTS.has(ext) || TEXT_EXTRACT_EXTS.has(ext);
+
+    // Decide where the ORIGINAL lives.
+    let originalAbs, originalRel;
+    if (isText) {
+      originalAbs = f.path;              // stays in Inbox/Uploads
+      originalRel = rel(f.path);
+      kept.push(originalRel);
+    } else {
+      const dest = uniquePath(attachmentsDir, f.filename);
+      fs.renameSync(f.path, dest);       // binary → Meta/Attachments
+      originalAbs = dest;
+      originalRel = rel(dest);
+      attachments.push(originalRel);
     }
 
-    // binary → file it as an attachment
-    const dest = uniquePath(attachmentsDir, f.filename);
-    fs.renameSync(f.path, dest);
-    attachments.push(rel(dest));
-
-    if (XLSX_EXTS.has(ext)) {
-      // extractions live OUTSIDE the vault (agent reads them by absolute
-      // path) so they never clutter the graph or the inbox
-      fs.mkdirSync(EXTRACT_DIR, { recursive: true });
-      const outPath = uniquePath(EXTRACT_DIR, path.basename(f.filename, ext) + ".extracted.txt");
+    // Run the extraction pipeline where the format is supported.
+    if (EXTRACT_EXTS.has(ext)) {
       try {
-        await execFileAsync("python", [
-          path.join(__dirname, "scripts", "extract_xlsx.py"), dest, outPath,
-        ], { timeout: 60000 });
-        extracted.push(outPath);
+        const manifest = await runExtract(originalAbs, uniqueExtractDir(f.filename));
+        if (manifest.ok) {
+          bundles.push({ originalName: f.filename, originalPath: originalRel, ...manifest });
+          for (const w of manifest.warnings || []) warnings.push(`${f.filename}: ${w}`);
+          await ingestEmailAttachments(manifest, bundles, warnings);
+        } else {
+          warnings.push(`Could not extract ${f.filename}: ${manifest.error || "unknown error"}`);
+        }
       } catch (err) {
         warnings.push(`Could not extract ${f.filename}: ${String(err?.message || err).slice(0, 200)}`);
       }
     }
   }
 
-  res.json({ kept, attachments, extracted, warnings });
+  res.json({ kept, attachments, bundles, warnings });
 });
 
-const EXTRACT_DIR = path.join(__dirname, "extractions");
-
-// prune extraction files older than 7 days on startup
+// prune extraction bundles (subdirectories) older than 7 days on startup
 try {
   const cutoff = Date.now() - 7 * 24 * 3600 * 1000;
   for (const name of fs.existsSync(EXTRACT_DIR) ? fs.readdirSync(EXTRACT_DIR) : []) {
     const p = path.join(EXTRACT_DIR, name);
-    if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
+    try {
+      if (fs.statSync(p).mtimeMs < cutoff) fs.rmSync(p, { recursive: true, force: true });
+    } catch { /* skip */ }
   }
 } catch { /* best effort */ }
 
