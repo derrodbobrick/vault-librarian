@@ -232,6 +232,23 @@
     </form>
   </dialog>
 
+  <!-- ============ File viewer ============ -->
+  <div id="file-viewer" hidden>
+    <div class="fv-backdrop" data-fv-close></div>
+    <div class="fv-panel" role="dialog" aria-label="File viewer">
+      <header class="fv-head">
+        <span id="fv-title" class="fv-title"></span>
+        <div class="fv-actions">
+          <a id="fv-download" class="ghost-btn" href="#" download title="Download the original file">Download</a>
+          <button id="fv-close" class="icon-btn" data-fv-close title="Close (Esc)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+      </header>
+      <div id="fv-body" class="fv-body"></div>
+    </div>
+  </div>
+
   <div id="toasts" aria-live="polite"></div>
 
   <script src="app.js"></script>

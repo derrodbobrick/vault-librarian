@@ -161,9 +161,12 @@ function mdToHtml(md, { streaming = false } = {}) {
     if (fences % 2 === 1) text += "\n```";
   }
   const names = knownNoteNames();
-  text = text.replace(/\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|([^\]\n]*))?\]\]/g, (_, target, alias) => {
+  text = text.replace(/(!?)\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|([^\]\n]*))?\]\]/g, (_, bang, target, alias) => {
     target = target.trim();
     const display = (alias || target).trim();
+    if (isFileRef(target)) {
+      return `<span class="wikilink attachment" data-file="${esc(target)}" title="Open ${esc(target)}">${esc(display)}</span>`;
+    }
     const cls = names.has(target.toLowerCase()) ? "wikilink" : "wikilink unresolved";
     return `<span class="${cls}" data-note="${esc(target)}">${esc(display)}</span>`;
   });
@@ -207,13 +210,99 @@ function copyText(text, btn) {
   }).catch(() => toast("Couldn't access the clipboard", "error"));
 }
 
-/* Clicking a wikilink chip anywhere opens the note. */
+/* Clicking a wikilink chip opens the note; an attachment ref opens the viewer. */
 document.addEventListener("click", (e) => {
   const link = e.target.closest(".wikilink");
-  if (link && !link.classList.contains("unresolved")) openNote(link.dataset.note);
+  if (link) {
+    if (link.dataset.file) { openFileViewer(link.dataset.file); return; }
+    if (!link.classList.contains("unresolved")) openNote(link.dataset.note);
+  }
   const chip = e.target.closest(".note-chip");
   if (chip && chip.dataset.note) openNote(chip.dataset.note);
 });
+
+/* ---------------------------------------------------------------------------
+   File viewer — open any uploaded/attached file in-app
+--------------------------------------------------------------------------- */
+const VIEWABLE_EXTS = new Set([
+  "pdf", "png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff", "svg",
+  "xlsx", "xlsm", "xls", "docx", "doc", "pptx", "ppt", "rtf", "html", "htm",
+  "eml", "msg", "csv", "tsv", "json", "txt", "yaml", "yml", "xml", "log",
+]);
+const IMG_EXTS = new Set(["png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff", "svg"]);
+const TEXT_VIEW_EXTS = new Set(["txt", "csv", "tsv", "json", "yaml", "yml", "xml", "log", "md"]);
+
+function fileExt(name) { const m = /\.([a-z0-9]{1,5})$/i.exec(name); return m ? m[1].toLowerCase() : ""; }
+function isFileRef(name) { const e = fileExt(name); return !!e && e !== "md" && VIEWABLE_EXTS.has(e); }
+
+async function openFileViewer(ref) {
+  const isPath = ref.includes("/");
+  const q = (isPath ? "path=" : "name=") + encodeURIComponent(ref);
+  const base = ref.split("/").pop();
+  const ext = fileExt(base);
+  const fileUrl = "/api/file?" + q;
+
+  $("#fv-title").textContent = base;
+  const dl = $("#fv-download");
+  dl.href = fileUrl; dl.setAttribute("download", base);
+  const body = $("#fv-body");
+  body.replaceChildren();
+  $("#file-viewer").hidden = false;
+
+  if (IMG_EXTS.has(ext)) {
+    const img = document.createElement("img");
+    img.className = "fv-img"; img.alt = base; img.src = fileUrl;
+    body.appendChild(img);
+  } else if (ext === "pdf") {
+    const frame = document.createElement("iframe");
+    frame.className = "fv-frame"; frame.src = fileUrl; frame.title = base;
+    body.appendChild(frame);
+  } else if (TEXT_VIEW_EXTS.has(ext)) {
+    try {
+      const t = await (await fetch(fileUrl)).text();
+      if (ext === "md") {
+        const art = document.createElement("article");
+        art.className = "fv-md note-body"; setHtml(art, mdToHtml(t)); body.appendChild(art);
+      } else {
+        const pre = document.createElement("pre");
+        pre.className = "fv-pre"; pre.textContent = t; body.appendChild(pre);
+      }
+    } catch { setHtml(body, `<div class="fv-loading">Couldn't load the file.</div>`); }
+  } else {
+    // Office / email / rtf / html → server-rendered preview (page images + text)
+    setHtml(body, `<div class="fv-loading">Rendering preview…</div>`);
+    try {
+      const p = await (await fetch("/api/preview?" + q)).json();
+      body.replaceChildren();
+      if (p.pages && p.pages.length) {
+        const gal = document.createElement("div");
+        gal.className = "fv-gallery";
+        for (const src of p.pages) {
+          const im = document.createElement("img");
+          im.src = src; im.loading = "lazy"; im.alt = "page render";
+          gal.appendChild(im);
+        }
+        body.appendChild(gal);
+      }
+      if (p.text) {
+        const det = document.createElement("details");
+        det.className = "fv-extract";
+        if (!p.pages || !p.pages.length) det.open = true;
+        setHtml(det, `<summary>Extracted text &amp; structure</summary>`);
+        const pre = document.createElement("pre"); pre.textContent = p.text; det.appendChild(pre);
+        body.appendChild(det);
+      }
+      if ((!p.pages || !p.pages.length) && !p.text) {
+        setHtml(body, `<div class="fv-loading">No in-app preview for this format. <a href="${fileUrl}" download>Download the file</a>.</div>`);
+      }
+    } catch {
+      setHtml(body, `<div class="fv-loading">Preview failed. <a href="${fileUrl}" download>Download the file</a>.</div>`);
+    }
+  }
+}
+
+function closeFileViewer() { $("#file-viewer").hidden = true; $("#fv-body").replaceChildren(); }
+$("#file-viewer").addEventListener("click", (e) => { if (e.target.closest("[data-fv-close]")) closeFileViewer(); });
 
 /* ---------------------------------------------------------------------------
    Chat: transcript, streaming, tool groups
@@ -1616,6 +1705,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (e.key === "Escape") {
+    if (!$("#file-viewer").hidden) { closeFileViewer(); return; }
     if (!paletteOverlay.hidden) { closePalette(); return; }
     if (dialog.open) { dialog.close(); pendingFiles = []; return; }
     if (!$("#slash-pop").hidden) { $("#slash-pop").hidden = true; return; }

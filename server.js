@@ -419,6 +419,77 @@ app.get("/api/tasks", (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// File viewer: serve any vault file, and (for binary/office formats) a preview
+// bundle of page renders + extracted text so it is viewable in the browser.
+// ---------------------------------------------------------------------------
+const VAULT_ROOT = path.resolve(VAULT);
+
+// Resolve a file by vault-relative path, or by basename (attachments referenced
+// as ![[name.ext]] carry only the basename). Prefers Meta/Attachments.
+function resolveVaultFile({ path: relPath, name }) {
+  if (relPath) {
+    const abs = path.resolve(VAULT, String(relPath));
+    if (abs.startsWith(VAULT_ROOT) && fs.existsSync(abs) && fs.statSync(abs).isFile()) return abs;
+    return null;
+  }
+  if (name) {
+    const target = String(name).toLowerCase();
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) { if (!IGNORED_DIRS.has(e.name)) { const r = walk(p); if (r) return r; } }
+        else if (e.name.toLowerCase() === target) return p;
+      }
+      return null;
+    };
+    const att = path.join(VAULT, "Meta", "Attachments");
+    return (fs.existsSync(att) && walk(att)) || walk(VAULT);
+  }
+  return null;
+}
+
+app.get("/api/file", (req, res) => {
+  const abs = resolveVaultFile({ path: req.query.path, name: req.query.name });
+  if (!abs) return res.status(404).json({ error: "file not found" });
+  res.sendFile(abs);
+});
+
+// Render PNGs live in EXTRACT_DIR (outside the vault); serve them by absolute
+// path, constrained to that directory.
+app.get("/api/render", (req, res) => {
+  const abs = path.resolve(String(req.query.f || ""));
+  if (!abs.startsWith(path.resolve(EXTRACT_DIR))) return res.status(403).end();
+  if (!fs.existsSync(abs)) return res.status(404).end();
+  res.sendFile(abs);
+});
+
+const previewCache = new Map(); // `${abs}:${mtimeMs}` -> preview payload
+
+app.get("/api/preview", async (req, res) => {
+  const abs = resolveVaultFile({ path: req.query.path, name: req.query.name });
+  if (!abs) return res.status(404).json({ error: "file not found" });
+  const ext = path.extname(abs).toLowerCase();
+  if (!EXTRACT_EXTS.has(ext)) return res.json({ kind: "none", pages: [], media: [], text: "" });
+  const key = `${abs}:${fs.statSync(abs).mtimeMs}`;
+  if (previewCache.has(key)) return res.json(previewCache.get(key));
+  try {
+    const manifest = await runExtract(abs, uniqueExtractDir(path.basename(abs)));
+    const toUrl = (p) => "/api/render?f=" + encodeURIComponent(p);
+    const out = {
+      ok: !!manifest.ok, kind: manifest.kind || ext.slice(1), pageCount: manifest.pageCount || 0,
+      pages: (manifest.pages || []).map(toUrl),
+      media: (manifest.media || []).map((m) => toUrl(m.path)),
+      meta: manifest.meta || {}, text: "",
+    };
+    try { out.text = fs.readFileSync(manifest.textFile, "utf-8"); } catch { /* no text */ }
+    previewCache.set(key, out);
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 app.get("/api/note", (req, res) => {
   const name = String(req.query.name || "");
   const file = findNoteByName(name);
