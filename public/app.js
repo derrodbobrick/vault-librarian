@@ -1682,6 +1682,8 @@ const KAN_ORDER = ["todo", "in-progress", "blocked", "done"];
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const isOpen = (t) => t.status !== "done" && t.status !== "cancelled";
 const isOverdue = (t) => t.due && t.due < todayISO() && isOpen(t);
+let dashCalMonth = null;   // {y, m} shown month for the calendar (m 0-indexed)
+let lastTasks = [];        // cache so the calendar can re-render on nav
 
 async function loadDashboards() {
   const grid = $("#dash-grid"), stats = $("#dash-stats");
@@ -1801,7 +1803,103 @@ function renderDashboards(tasks, grid, stats) {
   rc.appendChild(rl);
   cards.push(rc);
 
+  // --- Calendar + Gantt (wide) ---
+  cards.push(calendarCard(tasks));
+  cards.push(ganttCard(tasks));
+
   grid.replaceChildren(...cards);
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function calendarCard(tasks) {
+  const card = document.createElement("div");
+  card.className = "dash-card wide";
+  const byDay = new Map();
+  for (const t of tasks) if (t.due) (byDay.get(t.due) || byDay.set(t.due, []).get(t.due)).push(t);
+
+  if (!dashCalMonth) {
+    const n = new Date();
+    dashCalMonth = { y: n.getFullYear(), m: n.getMonth() };
+  }
+  const render = () => {
+    const { y, m } = dashCalMonth;
+    const first = new Date(y, m, 1);
+    const startDow = first.getDay();
+    const days = new Date(y, m + 1, 0).getDate();
+    const today = todayISO();
+    const cells = [];
+    for (let i = 0; i < startDow; i++) cells.push({ other: true });
+    for (let d = 1; d <= days; d++) {
+      const iso = `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      cells.push({ d, iso, tasks: byDay.get(iso) || [] });
+    }
+    const head = `<div class="cal-head"><span class="cal-title">${MONTHS[m]} ${y}</span>
+      <span class="cal-nav"><button data-nav="-1" title="Previous month">‹</button>
+      <button data-nav="0" title="This month">•</button>
+      <button data-nav="1" title="Next month">›</button></span></div>`;
+    const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
+    const grid = cells.map((c) => {
+      if (c.other) return `<div class="cal-cell other"></div>`;
+      const items = c.tasks.slice(0, 3).map((t) =>
+        `<span class="cal-task" data-note="${esc(t.name)}" style="border-left-color:var(--status-${t.status})" title="${esc(t.name)}">${esc(t.name)}</span>`).join("");
+      const more = c.tasks.length > 3 ? `<div class="cal-more">+${c.tasks.length - 3} more</div>` : "";
+      return `<div class="cal-cell${c.iso === today ? " today" : ""}"><span class="cal-date">${c.d}</span>${items}${more}</div>`;
+    }).join("");
+    setHtml(card, `<h3>Calendar — due dates</h3>${head}<div class="cal-grid">${dow}${grid}</div>`);
+    card.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => {
+      const nav = +b.dataset.nav;
+      if (nav === 0) { const n = new Date(); dashCalMonth = { y: n.getFullYear(), m: n.getMonth() }; }
+      else { let mm = dashCalMonth.m + nav, yy = dashCalMonth.y; if (mm < 0) { mm = 11; yy--; } if (mm > 11) { mm = 0; yy++; } dashCalMonth = { y: yy, m: mm }; }
+      render();
+    }));
+    card.querySelectorAll("[data-note]").forEach((el) =>
+      el.addEventListener("click", () => { setPage("project"); openNote(el.dataset.note); }));
+  };
+  render();
+  return card;
+}
+
+function ganttCard(tasks) {
+  const card = document.createElement("div");
+  card.className = "dash-card wide";
+  const withDates = tasks
+    .map((t) => ({ ...t, s: t.scheduled || t.start || t.due, e: t.due || t.scheduled || t.start }))
+    .filter((t) => t.s && t.e)
+    .sort((a, b) => a.s.localeCompare(b.s));
+  if (!withDates.length) {
+    setHtml(card, `<h3>Timeline</h3><div class="dash-empty">No tasks have start/finish dates.</div>`);
+    return card;
+  }
+  const ms = (d) => new Date(d + "T00:00:00").getTime();
+  const min = Math.min(...withDates.map((t) => ms(t.s)));
+  const max = Math.max(...withDates.map((t) => ms(t.e)));
+  const span = Math.max(max - min, 864e5);
+  const pct = (d) => ((ms(d) - min) / span) * 100;
+  const shown = withDates.slice(0, 80);
+
+  // month axis (~6 ticks)
+  const ticks = [];
+  const start = new Date(min); start.setDate(1);
+  for (let dt = new Date(start); dt.getTime() <= max; dt.setMonth(dt.getMonth() + 1)) {
+    ticks.push(`${MONTHS[dt.getMonth()]} ’${String(dt.getFullYear()).slice(2)}`);
+  }
+  const axis = `<div class="gantt-axis">${ticks.map((t) => `<span>${t}</span>`).join("")}</div>`;
+  const todayPct = pct(todayISO());
+  const todayMark = todayPct >= 0 && todayPct <= 100
+    ? `<div class="gantt-today" style="left:calc(168px + (100% - 168px) * ${todayPct / 100})"></div>` : "";
+
+  const rows = shown.map((t) => {
+    const l = Math.max(0, pct(t.s)), w = Math.max(1.2, pct(t.e) - l);
+    return `<div class="gantt-row"><span class="gantt-label" data-note="${esc(t.name)}" title="${esc(t.name)}">${esc(t.name)}</span>` +
+      `<span class="gantt-track"><span class="gantt-bar" data-note="${esc(t.name)}" title="${esc(t.name)}: ${esc(t.s)} → ${esc(t.e)}" ` +
+      `style="left:${l}%;width:${w}%;background:var(--status-${t.status})"></span></span></div>`;
+  }).join("");
+  const note = withDates.length > shown.length ? `<div class="dash-empty">Showing first ${shown.length} of ${withDates.length} dated tasks.</div>` : "";
+  setHtml(card, `<h3>Timeline / Gantt</h3><div class="gantt"><div class="gantt-inner" style="position:relative">${axis}${rows}${todayMark}</div></div>${note}`);
+  card.querySelectorAll("[data-note]").forEach((el) =>
+    el.addEventListener("click", () => { setPage("project"); openNote(el.dataset.note); }));
+  return card;
 }
 
 setChatState("idle");
