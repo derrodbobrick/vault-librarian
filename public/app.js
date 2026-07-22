@@ -1057,7 +1057,7 @@ async function loadGraph({ keepView = false } = {}) {
   if (!graph) initGraph();
   graph.graphData(graphData);
   if (!keepView && graphData.nodes.length && !reduceMotion.matches) {
-    setTimeout(() => graph.zoomToFit(500, 60), 600);
+    setTimeout(() => graph.zoomToFit(500, 60, nodeVisible), 600);
   }
   renderLegend();
   refreshDatalist();
@@ -1070,6 +1070,9 @@ function refreshVisibility() {
   graph.nodeVisibility((n) => nodeVisible(n));
   graph.linkVisibility((l) => linkVisible(l));
   updateEmptyState();
+  // force-graph pauses its render loop once the layout cools; without this the
+  // canvas keeps showing the previous frame after a filter/page/cross change.
+  graph.resumeAnimation();
 }
 
 function linkVisible(l) {
@@ -1659,7 +1662,7 @@ function setPage(page) {
   } else {
     refreshVisibility();
     renderLegend();
-    if (graph) { resizeGraph(); if (!reduceMotion.matches) setTimeout(() => graph.zoomToFit(450, 60), 80); }
+    if (graph) { resizeGraph(); setTimeout(() => graph.zoomToFit(reduceMotion.matches ? 0 : 450, 60, nodeVisible), 80); }
   }
 }
 
