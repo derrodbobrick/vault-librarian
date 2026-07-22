@@ -11,10 +11,12 @@ usually carry the real intent of an OT tracker/workbook:
 """
 from __future__ import annotations
 
-from .common import Bundle
-from . import render
+import os
 
-MAX_ROWS = 4000  # per sheet safety cap for the text dump
+from .common import Bundle
+
+MAX_ROWS = 4000       # per sheet safety cap for the text dump
+HTML_CAP_ROWS = 800   # per sheet cap for the HTML table view
 
 
 # Rough hue -> status word map for common conditional-formatting palettes.
@@ -168,12 +170,74 @@ def extract(src: str, out_dir: str, max_pages: int = 0) -> dict:
             b.add("", f"Status-coloured cells ({len(status_notes)}): "
                   + "; ".join(status_notes[:40]) + (" …" if len(status_notes) > 40 else ""))
 
-    wb_v.close()
-    wb_f.close()
-
     b.meta["charts"] = total_charts
     b.meta["embeddedImages"] = total_images
 
-    # Full visual render of each sheet (LibreOffice → PDF → PNG).
-    render.render_office_pages(src, b, max_pages)
+    # Rich HTML tables (all columns, fill colours, merged cells) — far more usable
+    # than paginating a wide sheet into narrow PDF pages (LibreOffice's default).
+    try:
+        b.add_html(_build_html(wb_v, props.title or os.path.basename(src)))
+    except Exception as e:
+        b.warn(f"html view: {e}")
+
+    wb_v.close()
+    wb_f.close()
     return b.result()
+
+
+def _esc(s):
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_HTML_HEAD = """<!doctype html><meta charset="utf-8">
+<style>
+:root{color-scheme:light dark}
+body{margin:0;font:12px/1.4 -apple-system,Segoe UI,Roboto,sans-serif;background:#fff;color:#141821}
+@media(prefers-color-scheme:dark){body{background:#0f1319;color:#e6eaf0}}
+h2{font:600 13px/1 sans-serif;margin:16px 12px 6px;position:sticky;left:0}
+.wrap{overflow:auto;margin:0 10px 18px;border:1px solid #8884;border-radius:6px;max-height:none}
+table{border-collapse:collapse;white-space:nowrap}
+td{border:1px solid #8883;padding:2px 7px;max-width:360px;overflow:hidden;text-overflow:ellipsis}
+tr:first-child td{font-weight:600;background:#8881}
+.more{color:#8899;font-style:italic}
+</style>"""
+
+
+def _build_html(wb, title):
+    parts = [_HTML_HEAD, f"<title>{_esc(title)}</title>"]
+    for name in wb.sheetnames:
+        ws = wb[name]
+        merged_tl, covered = {}, set()
+        for rng in ws.merged_cells.ranges:
+            merged_tl[(rng.min_row, rng.min_col)] = (rng.max_row - rng.min_row + 1, rng.max_col - rng.min_col + 1)
+            for r in range(rng.min_row, rng.max_row + 1):
+                for c in range(rng.min_col, rng.max_col + 1):
+                    if (r, c) != (rng.min_row, rng.min_col):
+                        covered.add((r, c))
+        parts.append(f"<h2>{_esc(name)}</h2><div class='wrap'><table>")
+        rown = 0
+        for row in ws.iter_rows():
+            rown += 1
+            if rown > HTML_CAP_ROWS:
+                parts.append(f"<tr><td class='more'>… {ws.max_row - HTML_CAP_ROWS} more rows — open the original file for the full sheet</td></tr>")
+                break
+            tds = []
+            for cell in row:
+                rc = (cell.row, cell.column)
+                if rc in covered:
+                    continue
+                txt = "" if cell.value is None else _esc(cell.value)
+                attrs = ""
+                span = merged_tl.get(rc)
+                if span:
+                    if span[0] > 1:
+                        attrs += f" rowspan={span[0]}"
+                    if span[1] > 1:
+                        attrs += f" colspan={span[1]}"
+                rgb = _fill_rgb(cell)
+                if rgb:
+                    attrs += f" style=\"background:#{rgb[-6:]};color:#141821\""
+                tds.append(f"<td{attrs}>{txt}</td>")
+            parts.append("<tr>" + "".join(tds) + "</tr>")
+        parts.append("</table></div>")
+    return "".join(parts)

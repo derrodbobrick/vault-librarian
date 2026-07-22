@@ -480,6 +480,7 @@ app.get("/api/preview", async (req, res) => {
       ok: !!manifest.ok, kind: manifest.kind || ext.slice(1), pageCount: manifest.pageCount || 0,
       pages: (manifest.pages || []).map(toUrl),
       media: (manifest.media || []).map((m) => toUrl(m.path)),
+      html: manifest.html ? toUrl(manifest.html) : null,
       meta: manifest.meta || {}, text: "",
     };
     try { out.text = fs.readFileSync(manifest.textFile, "utf-8"); } catch { /* no text */ }

@@ -274,7 +274,12 @@ async function openFileViewer(ref) {
     try {
       const p = await (await fetch("/api/preview?" + q)).json();
       body.replaceChildren();
-      if (p.pages && p.pages.length) {
+      if (p.html) {
+        // spreadsheets → scrollable HTML tables (all columns, colours preserved)
+        const frame = document.createElement("iframe");
+        frame.className = "fv-frame fv-html"; frame.src = p.html; frame.title = base;
+        body.appendChild(frame);
+      } else if (p.pages && p.pages.length) {
         const gal = document.createElement("div");
         gal.className = "fv-gallery";
         for (const src of p.pages) {
@@ -284,7 +289,7 @@ async function openFileViewer(ref) {
         }
         body.appendChild(gal);
       }
-      if (p.text) {
+      if (!p.html && p.text) {
         const det = document.createElement("details");
         det.className = "fv-extract";
         if (!p.pages || !p.pages.length) det.open = true;

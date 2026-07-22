@@ -48,6 +48,7 @@ class Bundle:
         self._md_parts: list[str] = []
         self.pages: list[str] = []          # absolute page-render paths
         self.media: list[dict] = []         # {"path","desc"} embedded images
+        self.html: str | None = None        # absolute path to a rich HTML view
         self.meta: dict = {}
         self.warnings: list[str] = []
         self._page_i = 0
@@ -98,6 +99,14 @@ class Bundle:
         self.media.append({"path": path, "desc": desc[:200]})
         return path
 
+    def add_html(self, content: str, name: str = "view.html") -> str:
+        """Save a rich HTML rendering (e.g. spreadsheet tables) for the viewer."""
+        path = os.path.join(self.out_dir, name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        self.html = path
+        return path
+
     # -- output -------------------------------------------------------------
     def write(self) -> str:
         md_path = os.path.join(self.out_dir, "extraction.md")
@@ -114,6 +123,7 @@ class Bundle:
             "textFile": md_path.replace(os.sep, "/"),
             "pages": [p.replace(os.sep, "/") for p in self.pages],
             "pageCount": len(self.pages),
+            "html": self.html.replace(os.sep, "/") if self.html else None,
             "media": [{"path": m["path"].replace(os.sep, "/"), "desc": m["desc"]} for m in self.media],
             "meta": self.meta,
             "warnings": self.warnings,
