@@ -100,16 +100,21 @@ export function mapSheet(sheet, dir, cfg) {
   const val = (row, title) => { const c = cell(row, title); return c ? (c.displayValue ?? c.value ?? "") : ""; };
   const rowById = new Map(sheet.rows.map((r) => [r.id, r]));
 
-  // Assign each row a unique note name up-front so links can target it.
+  // Skip blank rows (no Task title) — they are spacer/placeholder rows and would
+  // otherwise become empty "Row N" notes that clutter the graph.
+  const rows = sheet.rows.filter((r) => String(val(r, "Task")).trim());
+  const includedIds = new Set(rows.map((r) => r.id));
+
+  // Assign each included row a unique note name up-front so links can target it.
   const used = new Map();
   const nameFor = (row) => {
-    let base = sanitizeName(val(row, "Task") || `Row ${row.rowNumber}`);
+    let base = sanitizeName(val(row, "Task"));
     if (used.has(base.toLowerCase())) base = `${base} (${row.rowNumber})`;
     used.set(base.toLowerCase(), true);
     return base;
   };
   const noteName = new Map();
-  for (const r of sheet.rows) noteName.set(r.id, nameFor(r));
+  for (const r of rows) noteName.set(r.id, nameFor(r));
 
   const peopleMap = new Map(); // name -> {name,email}
   const remember = (p) => {
@@ -120,7 +125,7 @@ export function mapSheet(sheet, dir, cfg) {
     return peopleMap.get(p.name);
   };
 
-  const tasks = sheet.rows.map((r) => {
+  const tasks = rows.map((r) => {
     const state = String(val(r, "State")).toLowerCase();
     const pct = String(val(r, "% Complete")).replace("%", "").trim();
     let status = STATE_MAP[state] || "";
@@ -129,7 +134,8 @@ export function mapSheet(sheet, dir, cfg) {
     const assignees = resolvePeople(val(r, "Responsible"), dir).map(remember);
     const predCell = cell(r, "Predecessors");
     const preds = (predCell?.objectValue?.predecessors || [])
-      .map((p) => rowById.get(p.rowId)).filter(Boolean).map((pr) => noteName.get(pr.id));
+      .filter((p) => includedIds.has(p.rowId))
+      .map((p) => noteName.get(p.rowId));
 
     return {
       name: noteName.get(r.id),
@@ -140,7 +146,7 @@ export function mapSheet(sheet, dir, cfg) {
       scheduled: isoDate(val(r, "Start")), due: isoDate(val(r, "Finish")),
       duration: val(r, "Duration"), pct: val(r, "% Complete"),
       sprint: val(r, "Sprint"), allocation: val(r, "Allocation %"), notes: val(r, "Notes"),
-      parent: r.parentId ? noteName.get(r.parentId) : null,
+      parent: r.parentId && includedIds.has(r.parentId) ? noteName.get(r.parentId) : null,
       dependsOn: preds,
       permalink: r.permalink,
     };
