@@ -1655,7 +1655,7 @@ function setPage(page) {
   $("#graph-wrap").hidden = onDash;
   $("#cross-toggle").hidden = page !== "project";
   $("#cross-toggle").setAttribute("aria-pressed", String(crossGraph));
-  if (page !== "project") closeNote?.();
+  if (page !== "project") closeNotePanel();
 
   if (onDash) {
     loadDashboards();
