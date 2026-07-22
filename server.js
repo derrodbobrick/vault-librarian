@@ -390,6 +390,35 @@ app.get("/api/graph", (req, res) => {
   }
 });
 
+// Structured task/event data for the project dashboards (Kanban, calendar, etc.)
+app.get("/api/tasks", (req, res) => {
+  try {
+    const tasks = [];
+    for (const file of walkMarkdown(VAULT)) {
+      const fm = parseFrontmatter(fs.readFileSync(file, "utf-8"));
+      if (fm.type !== "task" && fm.type !== "milestone" && fm.type !== "event") continue;
+      tasks.push({
+        name: path.basename(file, ".md"),
+        path: rel(file),
+        type: fm.type,
+        status: fm.status || "todo",
+        priority: fm.priority || "",
+        due: fm.due || fm.date || "",
+        scheduled: fm.scheduled || "",
+        start: fm.start || "",
+        completed: fm.completed || "",
+        project: extractWikilinks(fm.project)[0] || "",
+        parent: extractWikilinks(fm.parent)[0] || "",
+        assignees: extractWikilinks(fm.assignee),
+        dependsOn: extractWikilinks(fm["depends-on"]),
+      });
+    }
+    res.json({ tasks });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 app.get("/api/note", (req, res) => {
   const name = String(req.query.name || "");
   const file = findNoteByName(name);
@@ -519,6 +548,26 @@ function parseFrontmatter(text) {
   return fm;
 }
 
+// Pull wikilink target names out of a frontmatter value (scalar or list form),
+// e.g. `"[[A]]"` or `["[[A]]", "[[B]]"]` -> ["A","B"].
+function extractWikilinks(val) {
+  const out = [];
+  if (!val) return out;
+  for (const m of String(val).matchAll(/\[\[([^\]|#\n]+)/g)) out.push(m[1].trim());
+  return out;
+}
+
+// Which relationship a PM frontmatter field expresses (drives edge coloring and
+// the Project graph's cross-graph toggle).
+const PM_FIELD_KIND = {
+  project: "membership", parent: "membership",
+  "depends-on": "dependency",
+  assignee: "assignment", owner: "assignment",
+};
+
+// PM node types that belong to the Project graph (everything else is knowledge).
+const PM_TYPES = new Set(["program", "project", "task", "milestone", "event"]);
+
 function buildGraph() {
   // templates are scaffolding, not knowledge — keep them out of the graph
   const files = walkMarkdown(VAULT).filter(
@@ -526,18 +575,26 @@ function buildGraph() {
   );
   const nodes = new Map(); // lowercase name -> node
   const links = [];
+  const edgeKind = new Map(); // "src|tgt" (lowercase) -> relationship kind
 
   for (const file of files) {
     const name = path.basename(file, ".md");
     const text = fs.readFileSync(file, "utf-8");
     const fm = parseFrontmatter(text);
     const folder = path.relative(VAULT, path.dirname(file)).split(path.sep)[0] || "";
-    nodes.set(name.toLowerCase(), {
-      id: name,
-      type: fm.type || "note",
-      folder,
-      exists: true,
-    });
+    const type = fm.type || "note";
+    const node = { id: name, type, folder, exists: true, pm: PM_TYPES.has(type) };
+    // Carry PM metadata for node styling (status color, priority size, overdue).
+    for (const k of ["status", "priority", "due", "scheduled", "completed"]) {
+      if (fm[k]) node[k] = fm[k];
+    }
+    nodes.set(name.toLowerCase(), node);
+    // Remember which relationship each PM frontmatter edge expresses.
+    for (const [field, kind] of Object.entries(PM_FIELD_KIND)) {
+      for (const tgt of extractWikilinks(fm[field])) {
+        edgeKind.set(name.toLowerCase() + "|" + tgt.toLowerCase(), kind);
+      }
+    }
   }
 
   for (const file of files) {
@@ -560,9 +617,14 @@ function buildGraph() {
       if (key === source.toLowerCase() || seen.has(key)) continue;
       seen.add(key);
       if (!nodes.has(key)) {
-        nodes.set(key, { id: target, type: "unresolved", folder: "", exists: false });
+        nodes.set(key, { id: target, type: "unresolved", folder: "", exists: false, pm: false });
       }
-      links.push({ source, target: nodes.get(key).id });
+      const kind = edgeKind.get(source.toLowerCase() + "|" + key) || "link";
+      // A "context" edge bridges a PM node and a knowledge node (R12) — the
+      // link the cross-graph toggle shows/hides.
+      const s = nodes.get(source.toLowerCase()), t = nodes.get(key);
+      const crossGraph = !!(s && t && s.pm !== t.pm);
+      links.push({ source, target: nodes.get(key).id, kind, cross: crossGraph });
     }
   }
 

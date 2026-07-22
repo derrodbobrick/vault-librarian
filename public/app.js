@@ -884,7 +884,8 @@ const NODE_TYPES = [
   "department", "work-center",    // rank 2
   "cell", "program", "moc", "area", // rank 3
   "person",                       // attaches at the org levels
-  "project", "report-series", "report", // rank 4
+  "project", "milestone", "event", "task", // rank 4 — project management
+  "report-series", "report",
   "vendor",                       // attaches beside projects/assets
   "machine", "hardware", "software", "server", "website", // rank 5 — assets
   "resource", "daily", "note", "template", // tail
@@ -910,8 +911,16 @@ let showOrphans = true;
 let focusState = null;        // { rootId, depth, visible:Set }
 let graphTheme = {};
 
+// Project-management view state
+let currentPage = "knowledge"; // knowledge | project | dashboards
+let crossGraph = false;         // on the project page, show bridges to knowledge notes
+const TASK_TYPES = new Set(["task", "milestone", "event"]);
+const STATUSES = ["todo", "in-progress", "blocked", "done", "cancelled", "upcoming"];
+
 try { hiddenTypes = new Set(JSON.parse(localStorage.getItem("vl-hidden-types") || "[]")); } catch { }
 try { showOrphans = localStorage.getItem("vl-orphans") !== "0"; } catch { }
+try { currentPage = localStorage.getItem("vl-page") || "knowledge"; } catch { }
+try { crossGraph = localStorage.getItem("vl-cross") === "1"; } catch { }
 
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -927,8 +936,12 @@ function readGraphTheme() {
     types: {},
   };
   for (const type of NODE_TYPES) t.types[type] = cssVar("--node-" + type) || cssVar("--node-note");
+  t.status = {};
+  for (const s of STATUSES) t.status[s] = cssVar("--status-" + s);
   return t;
 }
+
+const statusColor = (s) => graphTheme.status?.[s] || typeColor("task");
 
 function typeColor(type) {
   return graphTheme.types?.[type] || graphTheme.types?.note || "#94A3B8";
@@ -938,6 +951,8 @@ function typeColor(type) {
    their BFS depth's rank color; unreachable/unresolved stay muted gray. */
 function nodeFill(node) {
   if (!node.exists) return typeColor("unresolved");
+  // tasks are colored by status (todo/in-progress/blocked/done…), not type
+  if (node.type === "task" && node.status) return statusColor(node.status);
   if (graphTheme.types?.[node.type]) return graphTheme.types[node.type];
   const d = depths.get(node.id);
   if (d == null) return typeColor("unresolved");
@@ -971,10 +986,22 @@ function refreshGraphTheme() {
   }
 }
 
+function isPmNeighbor(n) {
+  for (const id of neighbors.get(n.id) || []) if (nodeById.get(id)?.pm) return true;
+  return false;
+}
+
 function nodeVisible(n) {
   if (hiddenTypes.has(n.type)) return false;
   if (!showOrphans && (degree.get(n.id) || 0) === 0) return false;
   if (focusState && !focusState.visible.has(n.id)) return false;
+  // page filter: Knowledge hides individual tasks/events; Projects shows the PM
+  // nodes and (only when Cross-links is on) the knowledge notes they bridge to.
+  if (currentPage === "knowledge") {
+    if (TASK_TYPES.has(n.type)) return false;
+  } else if (currentPage === "project") {
+    if (!n.pm) return crossGraph && isPmNeighbor(n);
+  }
   return true;
 }
 
@@ -1608,9 +1635,176 @@ function addWelcome() {
   );
 }
 
+/* ---------------------------------------------------------------------------
+   Project management: page switcher (Knowledge / Projects / Dashboards)
+--------------------------------------------------------------------------- */
+const PAGE_TITLE = { knowledge: "Knowledge graph", project: "Project graph", dashboards: "Dashboards" };
+
+function setPage(page) {
+  if (!PAGE_TITLE[page]) page = "knowledge";
+  currentPage = page;
+  try { localStorage.setItem("vl-page", page); } catch { }
+  for (const t of $$(".page-tab")) t.setAttribute("aria-selected", String(t.dataset.page === page));
+  document.title = "Vault Librarian — " + PAGE_TITLE[page];
+
+  const onDash = page === "dashboards";
+  $("#dashboards").hidden = !onDash;
+  $("#graph-wrap").hidden = onDash;
+  $("#cross-toggle").hidden = page !== "project";
+  $("#cross-toggle").setAttribute("aria-pressed", String(crossGraph));
+  if (page !== "project") closeNote?.();
+
+  if (onDash) {
+    loadDashboards();
+  } else {
+    refreshVisibility();
+    renderLegend();
+    if (graph) { resizeGraph(); if (!reduceMotion.matches) setTimeout(() => graph.zoomToFit(450, 60), 80); }
+  }
+}
+
+for (const tab of $$(".page-tab")) tab.addEventListener("click", () => setPage(tab.dataset.page));
+
+$("#cross-toggle").addEventListener("click", () => {
+  crossGraph = !crossGraph;
+  $("#cross-toggle").setAttribute("aria-pressed", String(crossGraph));
+  try { localStorage.setItem("vl-cross", crossGraph ? "1" : "0"); } catch { }
+  refreshVisibility();
+});
+
+/* ---------------------------------------------------------------------------
+   Dashboards (Kanban · Overdue/Due-soon · Per-project rollup)
+--------------------------------------------------------------------------- */
+const KAN_ORDER = ["todo", "in-progress", "blocked", "done"];
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const isOpen = (t) => t.status !== "done" && t.status !== "cancelled";
+const isOverdue = (t) => t.due && t.due < todayISO() && isOpen(t);
+
+async function loadDashboards() {
+  const grid = $("#dash-grid"), stats = $("#dash-stats");
+  setHtml(grid, `<div class="dash-empty">Loading tasks…</div>`);
+  stats.replaceChildren();
+  let tasks = [];
+  try {
+    const r = await fetch("/api/tasks");
+    tasks = (await r.json()).tasks || [];
+  } catch {
+    setHtml(grid, `<div class="dash-empty">Failed to load tasks.</div>`);
+    return;
+  }
+  renderDashboards(tasks, grid, stats);
+}
+$("#dash-refresh").addEventListener("click", loadDashboards);
+
+function statTile(num, label, alert) {
+  const d = document.createElement("div");
+  d.className = "stat-tile" + (alert ? " alert" : "");
+  setHtml(d, `<span class="num">${num}</span><span class="lbl">${esc(label)}</span>`);
+  return d;
+}
+
+function taskCard(t) {
+  const card = document.createElement("div");
+  card.className = "task-card";
+  card.style.borderLeftColor = `var(--status-${t.status})`;
+  const bits = [];
+  if (t.priority) bits.push(`<span class="prio-dot prio-${esc(t.priority)}"></span>${esc(t.priority)}`);
+  if (t.due) bits.push(`<span class="${isOverdue(t) ? "overdue" : ""}">▲ ${esc(t.due)}</span>`);
+  if (t.assignees?.length) bits.push(esc(t.assignees.join(", ")));
+  setHtml(card, `<div class="t-title">${esc(t.name)}</div>` +
+    (bits.length ? `<div class="t-meta">${bits.join(" ")}</div>` : ""));
+  card.addEventListener("click", () => { setPage("project"); openNote(t.name); });
+  return card;
+}
+
+function dashRow(t) {
+  const row = document.createElement("div");
+  row.className = "dash-row";
+  const over = isOverdue(t);
+  setHtml(row,
+    `<span class="sdot-inline" style="background:var(--status-${t.status})"></span>` +
+    `<span class="grow">${esc(t.name)}</span>` +
+    `<span class="due ${over ? "over" : ""}">${esc(t.due || "")}</span>`);
+  row.addEventListener("click", () => { setPage("project"); openNote(t.name); });
+  return row;
+}
+
+function renderDashboards(tasks, grid, stats) {
+  const open = tasks.filter(isOpen);
+  stats.replaceChildren(
+    statTile(tasks.length, "tasks"),
+    statTile(tasks.filter((t) => t.status === "in-progress").length, "in progress"),
+    statTile(tasks.filter((t) => t.status === "blocked").length, "blocked", true),
+    statTile(tasks.filter(isOverdue).length, "overdue", true),
+    statTile(tasks.filter((t) => t.status === "done").length, "done"),
+  );
+
+  const cards = [];
+
+  // --- Kanban ---
+  const kan = document.createElement("div");
+  kan.className = "dash-card wide";
+  const board = document.createElement("div");
+  board.className = "kanban";
+  for (const st of KAN_ORDER) {
+    const col = tasks.filter((t) => t.status === st);
+    const wrap = document.createElement("div");
+    wrap.className = "kan-col";
+    setHtml(wrap, `<div class="kan-head"><span class="sdot" style="background:var(--status-${st})"></span>${esc(st)}<span class="count">${col.length}</span></div>`);
+    for (const t of col.slice(0, 60)) wrap.appendChild(taskCard(t));
+    board.appendChild(wrap);
+  }
+  setHtml(kan, `<h3>Board</h3>`);
+  kan.appendChild(board);
+  cards.push(kan);
+
+  // --- Overdue / due soon ---
+  const soonCut = new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
+  const soon = tasks.filter((t) => isOpen(t) && t.due && t.due <= soonCut)
+    .sort((a, b) => a.due.localeCompare(b.due));
+  const od = document.createElement("div");
+  od.className = "dash-card";
+  setHtml(od, `<h3>Overdue &amp; due soon</h3>`);
+  const odList = document.createElement("div");
+  odList.className = "dash-list";
+  if (soon.length) soon.slice(0, 40).forEach((t) => odList.appendChild(dashRow(t)));
+  else setHtml(odList, `<div class="dash-empty">Nothing due in the next two weeks.</div>`);
+  od.appendChild(odList);
+  cards.push(od);
+
+  // --- Per-project rollup ---
+  const byProj = new Map();
+  for (const t of tasks) {
+    const p = t.project || "(no project)";
+    if (!byProj.has(p)) byProj.set(p, { total: 0, done: 0, blocked: 0 });
+    const s = byProj.get(p);
+    s.total++; if (t.status === "done") s.done++; if (t.status === "blocked") s.blocked++;
+  }
+  const rc = document.createElement("div");
+  rc.className = "dash-card";
+  setHtml(rc, `<h3>Projects</h3>`);
+  const rl = document.createElement("div");
+  rl.className = "dash-list";
+  for (const [p, s] of [...byProj.entries()].sort((a, b) => b[1].total - a[1].total)) {
+    const pct = Math.round((s.done / s.total) * 100);
+    const row = document.createElement("div");
+    row.className = "dash-row";
+    setHtml(row, `<span class="grow">${esc(p)}</span>` +
+      `<span class="due">${s.done}/${s.total}${s.blocked ? " · " + s.blocked + " blocked" : ""}</span>` +
+      `<span class="rollup-bar"><span style="width:${pct}%"></span></span>`);
+    if (p !== "(no project)") row.addEventListener("click", () => { setPage("project"); openNote(p); });
+    rl.appendChild(row);
+  }
+  rc.appendChild(rl);
+  cards.push(rc);
+
+  grid.replaceChildren(...cards);
+}
+
 setChatState("idle");
 $("#session-dot").dataset.state = "";
 loadGraph().then(() => {
+  setPage(currentPage);
   if (transcript.length) {
     for (const m of transcript) {
       if (m.r === "u") addUserMsg(m.t, { save: false });

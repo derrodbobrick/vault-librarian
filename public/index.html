@@ -59,8 +59,14 @@
     <!-- ============ Center stage: graph ============ -->
     <main id="stage">
       <header id="stage-header">
-        <h1>Knowledge graph</h1>
+        <div id="page-switch" role="tablist" aria-label="Choose view">
+          <button class="page-tab" data-page="knowledge" role="tab" aria-selected="true">Knowledge</button>
+          <button class="page-tab" data-page="project" role="tab" aria-selected="false">Projects</button>
+          <button class="page-tab" data-page="dashboards" role="tab" aria-selected="false">Dashboards</button>
+        </div>
         <div class="stage-tools">
+          <button id="cross-toggle" class="ghost-btn toggle" hidden aria-pressed="false"
+            title="Show wikilinks that bridge the project and knowledge graphs (R12)">Cross-links</button>
           <button id="graph-search-btn" class="ghost-btn search-hint" title="Search notes (Ctrl+K)">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="M20 20l-3.5-3.5" /></svg>
             <span>Find note…</span><kbd>Ctrl K</kbd>
@@ -92,6 +98,15 @@
           <p id="graph-error-msg">The graph failed to load.</p>
           <button id="graph-retry" class="primary-btn">Try again</button>
         </div>
+      </div>
+
+      <!-- Dashboards page (project management) -->
+      <div id="dashboards" hidden>
+        <div class="dash-toolbar">
+          <div class="dash-stats" id="dash-stats"></div>
+          <button id="dash-refresh" class="ghost-btn" title="Reload tasks">Refresh</button>
+        </div>
+        <div class="dash-grid" id="dash-grid"></div>
       </div>
 
       <!-- Note viewer slides over the graph -->

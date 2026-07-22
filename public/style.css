@@ -86,6 +86,16 @@
   --node-note: #5F6A79;
   --node-template: #68737B;
   --node-unresolved: #55606E;
+  --node-task: #6FBCE3;
+  --node-milestone: #F2CD6F;
+  --node-event: #FEC5DA;
+  /* task status palette (project graph nodes + dashboards) */
+  --status-todo: #6B7686;
+  --status-in-progress: #4AA3E0;
+  --status-blocked: #E5654B;
+  --status-done: #4CB782;
+  --status-cancelled: #4A5462;
+  --status-upcoming: #C9A94B;
 
   --font-ui: "Inter", "Segoe UI", system-ui, sans-serif;
   --font-display: "Space Grotesk", "Inter", "Segoe UI", system-ui, sans-serif;
@@ -150,6 +160,15 @@
   --node-note: #848D9B;
   --node-template: #788288;
   --node-unresolved: #9AA4B2;
+  --node-task: #2E86C4;
+  --node-milestone: #C79A1F;
+  --node-event: #D06A93;
+  --status-todo: #6B7686;
+  --status-in-progress: #1E7BC0;
+  --status-blocked: #C63B22;
+  --status-done: #1E9B5F;
+  --status-cancelled: #8A94A2;
+  --status-upcoming: #B08512;
 }
 
 /* ---------- Base ---------- */
@@ -953,3 +972,96 @@ dialog::backdrop { background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); }
   }
   .caret::after { animation: none; opacity: 1; }
 }
+
+/* ===================== Project management: page switcher ===================== */
+#page-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2, rgba(127,127,127,.12));
+  border-radius: 9px;
+}
+.page-tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted, #9AA4B2);
+  font: 600 13px/1 var(--font-ui);
+  padding: 7px 13px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.page-tab:hover { color: var(--text, #E7ECF2); }
+.page-tab[aria-selected="true"] {
+  background: var(--surface, rgba(255,255,255,.08));
+  color: var(--text, #E7ECF2);
+  box-shadow: 0 1px 2px rgba(0,0,0,.18);
+}
+
+/* ===================== Dashboards ===================== */
+#dashboards {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 40px;
+  background: var(--graph-bg);
+}
+.dash-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 16px; flex-wrap: wrap;
+}
+.dash-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+.stat-tile {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 14px; border-radius: 10px;
+  background: var(--surface, rgba(255,255,255,.05));
+  border: 1px solid var(--border, rgba(127,127,127,.18));
+  min-width: 88px;
+}
+.stat-tile .num { font: 700 20px/1 var(--font-display); color: var(--text, #E7ECF2); }
+.stat-tile .lbl { font: 500 11px/1.2 var(--font-ui); color: var(--muted, #9AA4B2); text-transform: uppercase; letter-spacing: .04em; }
+.stat-tile.alert .num { color: var(--status-blocked); }
+
+.dash-grid { display: grid; gap: 18px; }
+.dash-card {
+  background: var(--surface, rgba(255,255,255,.04));
+  border: 1px solid var(--border, rgba(127,127,127,.18));
+  border-radius: 12px; padding: 14px 16px;
+}
+.dash-card > h3 { font: 600 13px/1 var(--font-ui); margin-bottom: 12px; color: var(--text, #E7ECF2);
+  text-transform: uppercase; letter-spacing: .05em; }
+
+/* Kanban */
+.kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); gap: 12px; overflow-x: auto; }
+.kan-col { background: var(--surface-2, rgba(127,127,127,.08)); border-radius: 10px; padding: 8px; min-height: 60px; }
+.kan-head { display: flex; align-items: center; gap: 6px; font: 600 12px/1 var(--font-ui); margin: 2px 4px 8px; }
+.kan-head .count { color: var(--muted, #9AA4B2); font-weight: 500; }
+.kan-head .sdot { width: 9px; height: 9px; border-radius: 50%; }
+.task-card {
+  background: var(--surface, rgba(255,255,255,.06));
+  border: 1px solid var(--border, rgba(127,127,127,.16));
+  border-left-width: 3px;
+  border-radius: 8px; padding: 8px 10px; margin-bottom: 7px; cursor: pointer;
+  transition: transform .1s, border-color .15s;
+}
+.task-card:hover { transform: translateY(-1px); border-color: var(--accent, #22D3EE); }
+.task-card .t-title { font: 500 12.5px/1.35 var(--font-ui); color: var(--text, #E7ECF2); }
+.task-card .t-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px; font: 500 11px/1 var(--font-ui); color: var(--muted, #9AA4B2); }
+.t-meta .overdue { color: var(--status-blocked); font-weight: 600; }
+.prio-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
+.prio-urgent { background: var(--status-blocked); } .prio-high { background: #E8944B; }
+.prio-medium { background: var(--status-in-progress); } .prio-low { background: var(--status-todo); }
+
+/* Lists (overdue / rollup) */
+.dash-list { display: flex; flex-direction: column; gap: 2px; }
+.dash-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 7px; cursor: pointer; font: 500 12.5px/1.3 var(--font-ui); }
+.dash-row:hover { background: var(--surface-2, rgba(127,127,127,.1)); }
+.dash-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-row .due { color: var(--muted, #9AA4B2); font-size: 11.5px; }
+.dash-row .due.over { color: var(--status-blocked); font-weight: 600; }
+.rollup-bar { height: 6px; border-radius: 3px; background: var(--surface-2, rgba(127,127,127,.18)); overflow: hidden; flex: 0 0 90px; }
+.rollup-bar > span { display: block; height: 100%; background: var(--status-done); }
+.sdot-inline { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.dash-empty { color: var(--muted, #9AA4B2); font: 500 12px/1.4 var(--font-ui); padding: 6px 8px; }
+@media (min-width: 900px) { .dash-grid { grid-template-columns: 1fr 1fr; } .dash-card.wide { grid-column: 1 / -1; } }
